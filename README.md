@@ -241,3 +241,7 @@ x86_64-w64-mingw32-gcc -c -g src\file.c ...
 
 - Main documentation: See README.md
 - FLINT documentation: https://flintlib.org/
+
+## License
+
+DixonRes is distributed under the GNU General Public License version 3.0. See the file COPYING.
