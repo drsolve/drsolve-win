@@ -1,16 +1,16 @@
-// dixon_wrapper.c - 完全隔离的包装模块，包含所有FLINT相关代码
+// dixon_wrapper.c - Fully isolated wrapper module containing all FLINT-related code
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-// 跨平台DLL/共享库导出定义  __declspec(dllexport)
+// Cross-platform DLL/shared library export definition  __declspec(dllexport)
 #ifdef DLL_EXPORT
 	#define EXPORT
 #else
 	#define EXPORT
 #endif
 
-// 包含所有FLINT头文件 - 在DLL路径设置之后安全加载
+// Include all FLINT headers - safe to load after DLL path is configured
 #include <flint/fmpz_factor.h>
 #include "dixon_flint.h"
 #include "dixon_interface_flint.h"
@@ -20,26 +20,26 @@
 #include "dixon_with_ideal_reduction.h"
 #include "polynomial_system_solver.h"
 
-// 内部质数幂检查函数
+// Internal prime power check function
 static int check_prime_power_internal(const fmpz_t n, fmpz_t prime, unsigned long *power) {
     if (fmpz_cmp_ui(n, 1) <= 0) return 0;
     
-    // 检查是否直接是质数
+    // Check if it is directly a prime
     if (fmpz_is_probabprime(n)) {
         fmpz_set(prime, n);
         *power = 1;
         return 1;
     }
     
-    // 使用FLINT的因式分解功能
+    // Use FLINT's factorization functionality
     fmpz_factor_t factors;
     fmpz_factor_init(factors);
     fmpz_factor(factors, n);
     
-    // 检查是否只有一个质因子（即质数的幂）
+    // Check if there is only one prime factor (i.e. a prime power)
     if (factors->num == 1) {
-        fmpz_set(prime, factors->p + 0);  // 第一个（也是唯一的）质因子
-        *power = factors->exp[0];         // 对应的幂
+        fmpz_set(prime, factors->p + 0);  // First (and only) prime factor
+        *power = factors->exp[0];         // Corresponding exponent
         fmpz_factor_clear(factors);
         return 1;
     }
@@ -48,21 +48,21 @@ static int check_prime_power_internal(const fmpz_t n, fmpz_t prime, unsigned lon
     return 0;
 }
 
-// 解析字段大小的内部函数
+// Internal function to parse field size
 static int parse_field_size_internal(const char *field_str, fmpz_t prime, unsigned long *power) {
     if (!field_str || strlen(field_str) == 0) {
         return 0;
     }
     
-    // 检查是否包含'^'（幂记号）
+    // Check if the string contains '^' (power notation)
     const char *caret = strchr(field_str, '^');
     if (caret) {
-        // 格式：p^k
+        // Format: p^k
         char *prime_str = malloc(caret - field_str + 1);
         strncpy(prime_str, field_str, caret - field_str);
         prime_str[caret - field_str] = '\0';
         
-        // 解析质数部分
+        // Parse the prime part
         fmpz_t p;
         fmpz_init(p);
         int success = fmpz_set_str(p, prime_str, 10);
@@ -72,7 +72,7 @@ static int parse_field_size_internal(const char *field_str, fmpz_t prime, unsign
             return 0;
         }
         
-        // 解析幂部分
+        // Parse the exponent part
         char *endptr;
         unsigned long k = strtoul(caret + 1, &endptr, 10);
         if (*endptr != '\0' || k == 0) {
@@ -81,7 +81,7 @@ static int parse_field_size_internal(const char *field_str, fmpz_t prime, unsign
             return 0;
         }
         
-        // 检查p是否为质数
+        // Check if p is prime
         if (!fmpz_is_probabprime(p)) {
             fmpz_clear(p);
             free(prime_str);
@@ -94,7 +94,7 @@ static int parse_field_size_internal(const char *field_str, fmpz_t prime, unsign
         free(prime_str);
         return 1;
     } else {
-        // 格式：直接数字（可能是p或p^k）
+        // Format: plain number (may be p or p^k)
         fmpz_t field_size;
         fmpz_init(field_size);
         int success = fmpz_set_str(field_size, field_str, 10);
@@ -103,14 +103,14 @@ static int parse_field_size_internal(const char *field_str, fmpz_t prime, unsign
             return 0;
         }
         
-        // 检查是否为质数幂
+        // Check if it is a prime power
         int result = check_prime_power_internal(field_size, prime, power);
         fmpz_clear(field_size);
         return result;
     }
 }
 
-// 公共接口：验证字段大小
+// Public interface: validate field size
 EXPORT int validate_field_size(const char *field_str, char *error_msg, int error_msg_size) {
     fmpz_t prime;
     unsigned long power;
@@ -123,7 +123,7 @@ EXPORT int validate_field_size(const char *field_str, char *error_msg, int error
             snprintf(error_msg, error_msg_size, "Failed to parse '%s' as a valid field size", field_str);
         }
     } else {
-        // 检查质数是否太大
+        // Check if the prime is too large
         if (!fmpz_fits_si(prime)) {
             if (error_msg && error_msg_size > 0) {
                 snprintf(error_msg, error_msg_size, "Prime is too large (must fit in machine word)");
@@ -136,7 +136,7 @@ EXPORT int validate_field_size(const char *field_str, char *error_msg, int error
     return result;
 }
 
-// 公共接口：获取字段信息
+// Public interface: get field info
 EXPORT char* get_field_info(const char *field_str) {
     fmpz_t prime;
     unsigned long power;
@@ -154,12 +154,12 @@ EXPORT char* get_field_info(const char *field_str) {
     }
     
     if (power == 1) {
-        // 质数域
+        // Prime field
         char *prime_str = fmpz_get_str(NULL, 10, prime);
         snprintf(info, 256, "Field: F_%s (prime field)", prime_str);
         //free(prime_str);
     } else {
-        // 扩域
+        // Extension field
         unsigned long prime_ui = fmpz_get_ui(prime);
         unsigned long field_size = 1;
         for (unsigned long i = 0; i < power; i++) {
@@ -173,7 +173,7 @@ EXPORT char* get_field_info(const char *field_str) {
     return info;
 }
 
-// 公共接口：基础Dixon resultant计算
+// Public interface: basic Dixon resultant computation
 EXPORT char* dixon_compute_basic(const char *polys_str, const char *vars_str, const char *field_str) {
     fmpz_t prime;
     unsigned long power;
@@ -184,14 +184,14 @@ EXPORT char* dixon_compute_basic(const char *polys_str, const char *vars_str, co
         return strdup("Error: Invalid field size");
     }
     
-    // 初始化有限域上下文
+    // Initialize finite field context
     fq_nmod_ctx_t ctx;
     fq_nmod_ctx_init(ctx, prime, power, "t");
     
-    // 调用Dixon resultant函数
+    // Call Dixon resultant function
     char *result = dixon_str(polys_str, vars_str, ctx);
     
-    // 清理
+    // Cleanup
     //fq_nmod_ctx_clear(ctx);
     //fmpz_clear(prime);
     
@@ -288,7 +288,7 @@ static char* format_solutions_simple(const polynomial_solutions_t *sols, const f
                         strncat(buffer, sol_str, 200);
                         strcat(buffer, "\r\n");
                     } else {
-                        // Fallback: For prime fields, try to show as simple integer
+                        // Fallback: for prime fields, try to display as a simple integer
                         if (fq_nmod_ctx_degree(ctx) == 1) {
                             // For prime fields, extract the coefficient
                             fmpz_t coeff;
@@ -310,7 +310,7 @@ static char* format_solutions_simple(const polynomial_solutions_t *sols, const f
                     
                     // Clean up sol_str if it was allocated
                     if (sol_str) {
-                        ;//free(sol_str); // This cause a segment fault
+                        ;//free(sol_str); // This causes a segfault
                     }
                 }
             } else if (num_sols > 1 && num_sols <= 5) {
@@ -354,7 +354,7 @@ static char* format_solutions_simple(const polynomial_solutions_t *sols, const f
     return buffer;
 }
 
-// 公共接口：多项式系统求解
+// Public interface: polynomial system solver
 EXPORT char* dixon_compute_solver(const char *polys_str, const char *field_str) {
     fmpz_t prime;
     unsigned long power;
@@ -365,14 +365,14 @@ EXPORT char* dixon_compute_solver(const char *polys_str, const char *field_str) 
         return strdup("Error: Invalid field size");
     }
     
-    // 初始化有限域上下文
+    // Initialize finite field context
     fq_nmod_ctx_t ctx;
     fq_nmod_ctx_init(ctx, prime, power, "t");
     
-    // 调用多项式系统求解器
+    // Call polynomial system solver
     polynomial_solutions_t *solutions = solve_polynomial_system_string(polys_str, ctx);
     char *result = format_solutions_simple(solutions, ctx);
-    // 清理
+    // Cleanup
     //fq_nmod_ctx_clear(ctx);
     //fmpz_clear(prime);
     
@@ -383,7 +383,7 @@ EXPORT char* dixon_compute_solver(const char *polys_str, const char *field_str) 
     return result;
 }
 
-// 公共接口：Dixon with ideal reduction计算
+// Public interface: Dixon with ideal reduction computation
 EXPORT char* dixon_compute_ideal(const char *polys_str, const char *vars_str, 
                          const char *ideal_str, const char *field_str) {
     fmpz_t prime;
@@ -395,14 +395,14 @@ EXPORT char* dixon_compute_ideal(const char *polys_str, const char *vars_str,
         return strdup("Error: Invalid field size");
     }
     
-    // 初始化有限域上下文
+    // Initialize finite field context
     fq_nmod_ctx_t ctx;
     fq_nmod_ctx_init(ctx, prime, power, "t");
     
-    // 调用Dixon with ideal reduction函数
+    // Call Dixon with ideal reduction function
     char *result = dixon_with_ideal_reduction_str(polys_str, vars_str, ideal_str, ctx);
     
-    // 清理
+    // Cleanup
     fq_nmod_ctx_clear(ctx);
     fmpz_clear(prime);
     
@@ -412,5 +412,3 @@ EXPORT char* dixon_compute_ideal(const char *polys_str, const char *vars_str,
     
     return result;
 }
-
-
