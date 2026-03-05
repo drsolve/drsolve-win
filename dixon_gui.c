@@ -1,8 +1,8 @@
-// dixon_gui.c - 主文件，不包含任何dixon头文件
+// dixon_gui.c - Main file, does not include any dixon headers
 // x86_64-w64-mingw32-gcc -O3 -march=native -fopenmp -static -o dixon_gui.exe *.c -mwindows -I../include -L../lib -lflint -lmpfr -lgmp -lm -lpthread -lstdc++ -lcomctl32 -lcomdlg32 -luser32 -lgdi32 -lshlwapi
 
 
-// dixon_gui.c - 完全隔离版本，不包含任何FLINT头文件
+// dixon_gui.c - Fully isolated version, does not include any FLINT headers
 #include <windows.h>
 #include <libloaderapi.h>
 #include <shlwapi.h>
@@ -35,7 +35,7 @@
 // Custom messages
 #define WM_COMPUTATION_DONE   (WM_USER + 1)
 /*
-// 包装函数声明 - 只使用基础C类型
+// Wrapper function declarations - using basic C types only
 extern int validate_field_size(const char *field_str, char *error_msg, int error_msg_size);
 extern char* get_field_info(const char *field_str);
 extern char* dixon_compute_basic(const char *polys_str, const char *vars_str, const char *field_str);
@@ -44,14 +44,14 @@ extern char* dixon_compute_ideal(const char *polys_str, const char *vars_str,
                                 const char *ideal_str, const char *field_str);
 */
 
-// 动态加载的函数指针类型
+// Dynamically loaded function pointer types
 typedef int (*validate_field_size_func)(const char *field_str, char *error_msg, int error_msg_size);
 typedef char* (*get_field_info_func)(const char *field_str);
 typedef char* (*dixon_compute_basic_func)(const char *polys_str, const char *vars_str, const char *field_str);
 typedef char* (*dixon_compute_solver_func)(const char *polys_str, const char *field_str);
 typedef char* (*dixon_compute_ideal_func)(const char *polys_str, const char *vars_str, 
                                          const char *ideal_str, const char *field_str);
-// DLL相关全局变量
+// DLL-related global variables
 
 static validate_field_size_func validate_field_size = NULL;
 static get_field_info_func get_field_info = NULL;
@@ -60,7 +60,7 @@ static dixon_compute_solver_func dixon_compute_solver = NULL;
 static dixon_compute_ideal_func dixon_compute_ideal = NULL;
 
 static HMODULE g_dixonDll = NULL;
-// 全局变量
+// Global variables
 HINSTANCE g_hInst;
 HWND g_hMainWnd;
 HWND g_hTabControl;
@@ -80,7 +80,7 @@ HWND g_hBtnCompute, g_hBtnClear, g_hBtnSave, g_hBtnLoad;
 HANDLE g_hComputeThread = NULL;
 BOOL g_bComputing = FALSE;
 
-// 计算线程数据 - 只使用基础类型
+// Computation thread data - basic types only
 typedef struct {
     char *polys_str;
     char *vars_str;
@@ -92,18 +92,18 @@ typedef struct {
     double computation_time;
 } ComputeData;
 
-// 延迟加载DLL函数
+// Lazy-load DLL functions
 static BOOL LoadDixonDLL() {
-    if (g_dixonDll) return TRUE;  // 已经加载
+    if (g_dixonDll) return TRUE;  // Already loaded
     /*
-    // 写入日志记录加载时机
+    // Write log to record load timing
     FILE *f = fopen("dll_load_log.txt", "w");
     if (f) {
         fprintf(f, "Attempting to load dixon_math.dll AFTER constructor\n");
         fclose(f);
     }
     */
-    // 加载DLL
+    // Load DLL
     g_dixonDll = LoadLibraryA("dixon.dll");
     if (!g_dixonDll) {
         char error[512];
@@ -113,7 +113,7 @@ static BOOL LoadDixonDLL() {
     }
 	
     
-    // 获取函数地址
+    // Get function addresses
     validate_field_size = (validate_field_size_func)GetProcAddress(g_dixonDll, "validate_field_size");
     get_field_info = (get_field_info_func)GetProcAddress(g_dixonDll, "get_field_info");
     dixon_compute_basic = (dixon_compute_basic_func)GetProcAddress(g_dixonDll, "dixon_compute_basic");
@@ -132,7 +132,7 @@ static BOOL LoadDixonDLL() {
 }
 
 
-// 获取控件文本
+// Get control text
 static char* GetEditText(HWND hEdit) {
     int len = GetWindowTextLengthA(hEdit);
     if (len == 0) return strdup("");
@@ -142,53 +142,53 @@ static char* GetEditText(HWND hEdit) {
     return buffer;
 }
 
-// 设置控件文本
+// Set control text
 static void SetEditText(HWND hEdit, const char *text) {
     SetWindowTextA(hEdit, text ? text : "");
 }
 
-// 设置状态栏文本
+// Set status bar text
 static void SetStatusText(const char *text) {
     SendMessageA(g_hStatusBar, SB_SETTEXTA, 0, (LPARAM)text);
 }
 
-// 计算线程函数 - 只调用包装函数
+// Computation thread function - calls wrapper functions only
 static DWORD WINAPI ComputeThreadProc(LPVOID lpParam) {
     ComputeData *data = (ComputeData*)lpParam;
     clock_t start_time = clock();
 
-	// 确保DLL已加载（这里才第一次触碰FLINT相关代码）
+	// Ensure DLL is loaded (first contact with FLINT-related code happens here)
     if (!LoadDixonDLL()) {
         data->success = FALSE;
         PostMessage(g_hMainWnd, WM_COMPUTATION_DONE, 0, (LPARAM)data);
         return 0;
     }
 
-    // 根据模式调用相应的包装函数
+    // Call the appropriate wrapper function based on mode
     if (data->computation_mode == 1) {
-        // 多项式系统求解
+        // Polynomial system solver
         data->result = dixon_compute_solver(data->polys_str, data->field_str);
     } else if (data->computation_mode == 2) {
         // Dixon with ideal reduction
         data->result = dixon_compute_ideal(data->polys_str, data->vars_str, 
                                          data->ideal_str, data->field_str);
     } else {
-        // 基础Dixon resultant
+        // Basic Dixon resultant
         data->result = dixon_compute_basic(data->polys_str, data->vars_str, data->field_str);
     }
     
     data->success = (data->result != NULL);
     
-    // 计算时间
+    // Record elapsed time
     clock_t end_time = clock();
     data->computation_time = ((double)(end_time - start_time)) / CLOCKS_PER_SEC;
     
-    // 通知主线程
+    // Notify main thread
     PostMessage(g_hMainWnd, WM_COMPUTATION_DONE, 0, (LPARAM)data);
     return 0;
 }
 
-// 统计逗号分隔项数量
+// Count comma-separated items
 static int count_comma_separated_items(const char *str) {
     if (!str || strlen(str) == 0) return 0;
     
@@ -199,32 +199,32 @@ static int count_comma_separated_items(const char *str) {
     return count;
 }
 
-// 开始计算
+// Start computation
 static void StartComputation() {
     if (g_bComputing) return;
     
-    // 获取当前选项卡
+    // Get current tab
     int current_tab = TabCtrl_GetCurSel(g_hTabControl);
     
     ComputeData *data = malloc(sizeof(ComputeData));
     memset(data, 0, sizeof(ComputeData));
     
     if (current_tab == 0) {
-        // 多项式系统求解器
+        // Polynomial system solver tab
         data->polys_str = GetEditText(g_hSolverPolys);
         data->vars_str = NULL;
         data->field_str = GetEditText(g_hSolverField);
         data->ideal_str = NULL;
         data->computation_mode = 1;
     } else if (current_tab == 1) {
-        // 基础Dixon
+        // Basic Dixon tab
         data->polys_str = GetEditText(g_hBasicPolys);
         data->vars_str = GetEditText(g_hBasicVars);
         data->field_str = GetEditText(g_hBasicField);
         data->ideal_str = NULL;
         data->computation_mode = 0;
     } else {
-        // Dixon with ideal reduction
+        // Dixon with ideal reduction tab
         data->polys_str = GetEditText(g_hIdealPolys);
         data->vars_str = GetEditText(g_hIdealVars);
         data->field_str = GetEditText(g_hIdealField);
@@ -232,13 +232,13 @@ static void StartComputation() {
         data->computation_mode = 2;
     }
     
-    // 验证基础输入
+    // Validate basic inputs
     if (strlen(data->polys_str) == 0 || strlen(data->field_str) == 0) {
         MessageBoxA(g_hMainWnd, "Please fill polynomials and field size!", "Input Error", MB_OK | MB_ICONERROR);
         goto cleanup_and_return;
     }
     
-    // 使用包装函数验证字段大小
+    // Validate field size using wrapper function
     char error_msg[512];
     if (!validate_field_size(data->field_str, error_msg, sizeof(error_msg))) {
         char full_error[1024];
@@ -251,21 +251,21 @@ static void StartComputation() {
         goto cleanup_and_return;
     }
     
-    // 显示字段信息
+    // Display field info
     char *field_info = get_field_info(data->field_str);
     if (field_info) {
         SetStatusText(field_info);
         free(field_info);
     }
     
-    // Dixon模式的额外验证
+    // Extra validation for Dixon modes
     if (data->computation_mode == 0 || data->computation_mode == 2) {
         if (!data->vars_str || strlen(data->vars_str) == 0) {
             MessageBoxA(g_hMainWnd, "Please specify variables to eliminate for Dixon resultant!", "Input Error", MB_OK | MB_ICONERROR);
             goto cleanup_and_return;
         }
         
-        // 检查方程/变量数量
+        // Check equation/variable counts
         int poly_count = count_comma_separated_items(data->polys_str);
         int var_count = count_comma_separated_items(data->vars_str);
         
@@ -281,7 +281,7 @@ static void StartComputation() {
         }
     }
     
-    // ideal reduction模式的额外验证
+    // Extra validation for ideal reduction mode
     if (data->computation_mode == 2) {
         if (!data->ideal_str || strlen(data->ideal_str) == 0) {
             MessageBoxA(g_hMainWnd, "Please specify ideal generators for Dixon with ideal reduction!", "Input Error", MB_OK | MB_ICONERROR);
@@ -289,7 +289,7 @@ static void StartComputation() {
         }
     }
     
-    // 更新UI状态
+    // Update UI state
     g_bComputing = TRUE;
     EnableWindow(g_hBtnCompute, FALSE);
     EnableWindow(g_hBtnSave, FALSE);
@@ -297,7 +297,7 @@ static void StartComputation() {
     SendMessage(g_hProgressBar, PBM_SETMARQUEE, TRUE, 50);
     SetStatusText("Computing...");
     
-    // 启动计算线程
+    // Start computation thread
     DWORD threadId;
     g_hComputeThread = CreateThread(NULL, 0, ComputeThreadProc, data, 0, &threadId);
     
@@ -320,16 +320,16 @@ cleanup_and_return:
     free(data);
 }
 
-// 处理计算完成
+// Handle computation complete
 static void HandleComputationDone(ComputeData *data) {
-    // 更新UI状态
+    // Update UI state
     g_bComputing = FALSE;
     EnableWindow(g_hBtnCompute, TRUE);
     ShowWindow(g_hProgressBar, SW_HIDE);
     SendMessage(g_hProgressBar, PBM_SETMARQUEE, FALSE, 0);
     
     if (data->success && data->result) {
-        // 构建显示文本
+        // Build display text
         size_t result_len = strlen(data->result);
         size_t msg_len = result_len + 512;
         char *display_text = malloc(msg_len);
@@ -349,7 +349,7 @@ static void HandleComputationDone(ComputeData *data) {
         SetStatusText("Computation completed");
         EnableWindow(g_hBtnSave, TRUE);
     } else {
-        // 处理失败情况
+        // Handle failure cases
         const char *error_msgs[] = {
             "Dixon resultant computation failed! Please check your input.\r\n\r\nNote: Number of variables to eliminate must equal (number of equations - 1).",
             "Polynomial system solving failed! Please check your input.\r\n\r\nNote: Number of equations must equal number of variables.",
@@ -360,7 +360,7 @@ static void HandleComputationDone(ComputeData *data) {
         SetStatusText("Computation failed");
     }
     
-    // 清理数据
+    // Clean up data
     if (data->polys_str) free(data->polys_str);
     if (data->vars_str) free(data->vars_str);
     if (data->field_str) free(data->field_str);
@@ -368,21 +368,21 @@ static void HandleComputationDone(ComputeData *data) {
     if (data->result) free(data->result);
     free(data);
     
-    // 关闭线程句柄
+    // Close thread handle
     if (g_hComputeThread) {
         CloseHandle(g_hComputeThread);
         g_hComputeThread = NULL;
     }
 }
 
-// 清除结果
+// Clear results
 static void ClearResults() {
     SetEditText(g_hResultText, "");
     SetStatusText("Ready");
     EnableWindow(g_hBtnSave, FALSE);
 }
 
-// 保存结果
+// Save results
 static void SaveResults() {
     OPENFILENAMEA ofn;
     char szFile[260] = "dixon_result.txt";
@@ -412,7 +412,7 @@ static void SaveResults() {
     }
 }
 
-// 加载文件
+// Load file
 static void LoadFile() {
     OPENFILENAMEA ofn;
     char szFile[260] = "";
@@ -434,15 +434,15 @@ static void LoadFile() {
             char *field_str = NULL, *polys_str = NULL, *vars_str = NULL, *ideal_str = NULL;
             
             while (fgets(line, sizeof(line), file)) {
-                // 去除换行符
+                // Strip newline characters
                 line[strcspn(line, "\n\r")] = '\0';
                 
-                // 跳过空行和注释
+                // Skip blank lines and comments
                 if (strlen(line) == 0 || line[0] == '#') {
                     continue;
                 }
                 
-                // 处理数据行
+                // Process data lines
                 if (data_line_count == 0) {
                     field_str = strdup(line);
                 } else if (data_line_count == 1) {
@@ -460,27 +460,27 @@ static void LoadFile() {
             
             fclose(file);
             
-            // 根据当前选项卡填充字段
+            // Populate fields based on current tab
             int current_tab = TabCtrl_GetCurSel(g_hTabControl);
             
             if (current_tab == 0) {
-                // 多项式系统求解器选项卡
+                // Polynomial system solver tab
                 if (field_str) SetEditText(g_hSolverField, field_str);
                 if (polys_str) SetEditText(g_hSolverPolys, polys_str);
             } else if (current_tab == 1) {
-                // 基础Dixon结果选项卡
+                // Basic Dixon resultant tab
                 if (field_str) SetEditText(g_hBasicField, field_str);
                 if (polys_str) SetEditText(g_hBasicPolys, polys_str);
                 if (vars_str) SetEditText(g_hBasicVars, vars_str);
             } else if (current_tab == 2) {
-                // Dixon with Ideal Reduction选项卡
+                // Dixon with Ideal Reduction tab
                 if (field_str) SetEditText(g_hIdealField, field_str);
                 if (polys_str) SetEditText(g_hIdealPolys, polys_str);
                 if (vars_str) SetEditText(g_hIdealVars, vars_str);
                 if (ideal_str) SetEditText(g_hIdealGenerators, ideal_str);
             }
             
-            // 显示成功消息
+            // Show success message
             char success_msg[512];
             snprintf(success_msg, sizeof(success_msg), 
                     "File loaded successfully!\n\nLoaded %d data lines:\n%s%s%s%s", 
@@ -493,7 +493,7 @@ static void LoadFile() {
             
             SetStatusText("File loaded successfully");
             
-            // 清理分配的字符串
+            // Free allocated strings
             if (field_str) free(field_str);
             if (polys_str) free(polys_str);
             if (vars_str) free(vars_str);
@@ -505,7 +505,7 @@ static void LoadFile() {
     }
 }
 
-// 创建选项卡控件
+// Create tab controls
 static void CreateTabControls(HWND hParent) {
     int y = 10;
     int edit_height = 22;
@@ -513,11 +513,11 @@ static void CreateTabControls(HWND hParent) {
     int margin = 8;
     int client_width = 560;
     
-    // 根据选项卡索引创建不同控件
+    // Create different controls based on tab index
     int tab_index = (int)GetWindowLongPtrA(hParent, GWLP_USERDATA);
     
     if (tab_index == 0) {
-        // 多项式系统求解器选项卡
+        // Polynomial system solver tab
         CreateWindowA("STATIC", "Polynomial System (comma separated):", WS_CHILD | WS_VISIBLE,
                      10, y, 320, label_height, hParent, NULL, g_hInst, NULL);
         y += label_height + 2;
@@ -539,7 +539,7 @@ static void CreateTabControls(HWND hParent) {
         SendMessageA(g_hSolverField, EM_SETCUEBANNER, TRUE, (LPARAM)L"e.g.: 257, 2^8, 256");
         
     } else if (tab_index == 1) {
-        // 基础Dixon选项卡
+        // Basic Dixon tab
         CreateWindowA("STATIC", "Polynomials (comma separated):", WS_CHILD | WS_VISIBLE,
                      10, y, 280, label_height, hParent, NULL, g_hInst, NULL);
         y += label_height + 2;
@@ -569,7 +569,7 @@ static void CreateTabControls(HWND hParent) {
         SendMessageA(g_hBasicField, EM_SETCUEBANNER, TRUE, (LPARAM)L"e.g.: 257, 2^8, 256");
         
     } else {
-        // Dixon with ideal reduction选项卡
+        // Dixon with ideal reduction tab
         CreateWindowA("STATIC", "Polynomials (comma separated):", WS_CHILD | WS_VISIBLE,
                      10, y, 280, label_height, hParent, NULL, g_hInst, NULL);
         y += label_height + 2;
@@ -605,22 +605,22 @@ static void CreateTabControls(HWND hParent) {
     }
 }
 
-// 窗口过程
+// Window procedure
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
     case WM_CREATE: {
-        // 初始化通用控件
+        // Initialize common controls
         INITCOMMONCONTROLSEX icex;
         icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
         icex.dwICC = ICC_TAB_CLASSES | ICC_PROGRESS_CLASS | ICC_BAR_CLASSES;
         InitCommonControlsEx(&icex);
         
-        // 创建选项卡控件
+        // Create tab control
         g_hTabControl = CreateWindowA(WC_TABCONTROLA, "",
                                      WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
                                      10, 10, 580, 200, hWnd, (HMENU)ID_TAB_CONTROL, g_hInst, NULL);
         
-        // 添加选项卡
+        // Add tabs
         TCITEMA tie;
         tie.mask = TCIF_TEXT;
         tie.pszText = "Polynomial System Solver";
@@ -632,7 +632,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         tie.pszText = "Dixon with Ideal Reduction";
         TabCtrl_InsertItem(g_hTabControl, 2, &tie);
         
-        // 创建选项卡内容窗口
+        // Create tab content windows
         RECT rcTab;
         GetClientRect(g_hTabControl, &rcTab);
         TabCtrl_AdjustRect(g_hTabControl, FALSE, &rcTab);
@@ -649,7 +649,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                                       rcTab.left, rcTab.top, rcTab.right - rcTab.left, rcTab.bottom - rcTab.top,
                                       g_hTabControl, NULL, g_hInst, NULL);
         
-        // 存储选项卡句柄和索引
+        // Store tab handles and indices
         SetWindowLongPtrA(hSolverTab, GWLP_USERDATA, 0);
         SetWindowLongPtrA(hBasicTab, GWLP_USERDATA, 1);
         SetWindowLongPtrA(hIdealTab, GWLP_USERDATA, 2);
@@ -658,7 +658,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         CreateTabControls(hBasicTab);
         CreateTabControls(hIdealTab);
         
-        // 创建按钮
+        // Create buttons
         g_hBtnCompute = CreateWindowA("BUTTON", "Compute", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                                      10, 220, 80, 28, hWnd, (HMENU)ID_BTN_COMPUTE, g_hInst, NULL);
         
@@ -673,12 +673,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         
         EnableWindow(g_hBtnSave, FALSE);
         
-        // 创建进度条
+        // Create progress bar
         g_hProgressBar = CreateWindowA(PROGRESS_CLASSA, NULL,
                                       WS_CHILD | PBS_MARQUEE,
                                       10, 258, 580, 18, hWnd, (HMENU)ID_PROGRESS_BAR, g_hInst, NULL);
         
-        // 创建结果文本区域
+        // Create result text area
         CreateWindowA("STATIC", "Computation Results:", WS_CHILD | WS_VISIBLE,
                      10, 285, 150, 16, hWnd, NULL, g_hInst, NULL);
         
@@ -687,13 +687,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                                      ES_MULTILINE | ES_READONLY,
                                      10, 305, 580, 140, hWnd, (HMENU)ID_RESULT_TEXT, g_hInst, NULL);
         
-        // 设置等宽字体
+        // Set monospace font
         HFONT hFont = CreateFontA(12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, ANSI_CHARSET,
                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
                                  FIXED_PITCH | FF_MODERN, "Consolas");
         SendMessage(g_hResultText, WM_SETFONT, (WPARAM)hFont, TRUE);
         
-        // 创建状态栏
+        // Create status bar
         g_hStatusBar = CreateWindowA(STATUSCLASSNAMEA, NULL,
                                     WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
                                     0, 0, 0, 0, hWnd, (HMENU)ID_STATUS_BAR, g_hInst, NULL);
@@ -724,17 +724,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
     case WM_NOTIFY: {
         LPNMHDR pnmh = (LPNMHDR)lParam;
         if (pnmh->idFrom == ID_TAB_CONTROL && pnmh->code == TCN_SELCHANGE) {
-            // 处理选项卡选择变化
+            // Handle tab selection change
             int sel = TabCtrl_GetCurSel(g_hTabControl);
             
-            // 隐藏所有选项卡内容窗口
+            // Hide all tab content windows
             HWND hChild = GetWindow(g_hTabControl, GW_CHILD);
             while (hChild) {
                 ShowWindow(hChild, SW_HIDE);
                 hChild = GetWindow(hChild, GW_HWNDNEXT);
             }
             
-            // 显示选中的选项卡内容
+            // Show selected tab content
             hChild = GetWindow(g_hTabControl, GW_CHILD);
             int index = 0;
             while (hChild && index <= sel) {
@@ -755,7 +755,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
     }
     
     case WM_SIZE: {
-        // 重新调整状态栏大小
+        // Resize status bar
         SendMessage(g_hStatusBar, WM_SIZE, wParam, lParam);
         break;
     }
@@ -789,7 +789,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
     return 0;
 }
 
-// 入口点
+// Entry point
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     wchar_t exePath[MAX_PATH];
     GetModuleFileNameW(NULL, exePath, MAX_PATH);
@@ -806,7 +806,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	
     g_hInst = hInstance;
     
-    // 注册窗口类
+    // Register window class
     WNDCLASSEXA wcex;
     wcex.cbSize = sizeof(WNDCLASSEXA);
     wcex.style = CS_HREDRAW | CS_VREDRAW;
@@ -826,7 +826,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         return 1;
     }
     
-    // 创建主窗口
+    // Create main window
     g_hMainWnd = CreateWindowA("DixonGUIWindow", "Dixon Resultant & Polynomial System Solver - Complete FLINT Isolation",
                               WS_OVERLAPPEDWINDOW,
                               CW_USEDEFAULT, 0, 620, 500, NULL, NULL, hInstance, NULL);
@@ -839,7 +839,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     ShowWindow(g_hMainWnd, nCmdShow);
     UpdateWindow(g_hMainWnd);
     
-    // 消息循环
+    // Message loop
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
