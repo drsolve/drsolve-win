@@ -244,4 +244,4 @@ x86_64-w64-mingw32-gcc -c -g src\file.c ...
 
 ## License
 
-DixonRes is distributed under the GNU General Public License version 3.0. See the file COPYING.
+DixonRes is distributed under the GNU General Public License version 2.0 (GPL-2.0-or-later). See the file COPYING.
