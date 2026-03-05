@@ -1,8 +1,3 @@
-// gcc -O3 -march=native -o dixon main.c -lflint -lmpfr -lgmp -lpthread -L/home/suohaohai02/mylinks -lflint -lstdc++ -lpml2 -fopenmp
-//x86_64-w64-mingw32-gcc -O3 -march=native -fopenmp -static -o dixon.exe dixon.c -I../include -L../lib -lflint -lmpfr -lgmp -lm -lpthread -lstdc++
-//gcc -O3 -march=native -fopenmp -DHAVE_FLINT -DHAVE_PML -fcommon -I/home/ideal/Attack/Dixon/pml-main/flint-extras/include -I/home/ideal/Attack/Dixon/flint-main/include -o dixon *.c -L/home/ideal/Attack/Dixon/flint-main/lib -L/home/ideal/Attack/Dixon/flint-main -L/home/ideal/Attack/Dixon/pml-main/flint-extras/lib -L/home/ideal/Attack/Dixon/pml-main/flint-extras -lflint -lpml -lmpfr -lgmp -lm -lpthread -lstdc++ -fopenmp
-//x86_64-w64-mingw32-gcc -O3 -march=native -fopenmp -static -o dixon.exe *.c -mwindows -I../include -L../lib -lflint -lmpfr -lgmp -lm -lpthread -lstdc++ -lcomctl32 -lcomdlg32 -luser32 -lgdi32
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
