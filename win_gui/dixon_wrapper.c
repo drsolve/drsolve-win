@@ -173,6 +173,76 @@ static int append_arg(string_builder_t *sb, const char *arg)
     return append_quoted_arg(sb, arg);
 }
 
+static const char *skip_first_arg(const char *command_line)
+{
+    const char *p = command_line;
+
+    if (!p) return "";
+
+    while (*p == ' ' || *p == '	') p++;
+
+    if (*p == '"') {
+        p++;
+        while (*p) {
+            if (*p == '"') {
+                p++;
+                break;
+            }
+            if (*p == '\\' && p[1] != '\0') p++;
+            p++;
+        }
+    } else {
+        while (*p && *p != ' ' && *p != '	') p++;
+    }
+
+    while (*p == ' ' || *p == '	') p++;
+    return p;
+}
+
+static char *make_display_command_line(const char *actual_command_line)
+{
+    string_builder_t sb = {0};
+    const char *tail = skip_first_arg(actual_command_line);
+
+    if (!sb_append(&sb, "./dixon.exe")) {
+        sb_free(&sb);
+        return NULL;
+    }
+
+    if (*tail) {
+        if (!sb_append(&sb, " ") || !sb_append(&sb, tail)) {
+            sb_free(&sb);
+            return NULL;
+        }
+    }
+
+    return sb.data;
+}
+
+static char *compose_combined_output(const char *display_command_line,
+                                     const char *stdout_text)
+{
+    string_builder_t sb = {0};
+    const char *body = stdout_text ? stdout_text : "";
+
+    if (display_command_line && display_command_line[0] != '\0') {
+        if (!sb_append(&sb, "Command: ") ||
+            !sb_append(&sb, display_command_line) ||
+            !sb_append(&sb, "\r\n\r\n")) {
+            sb_free(&sb);
+            return NULL;
+        }
+    }
+
+    if (!sb_append(&sb, body)) {
+        sb_free(&sb);
+        return NULL;
+    }
+
+    if (!sb.data) return dup_string("");
+    return sb.data;
+}
+
 static char *trim_copy(const char *text)
 {
     const char *start;
@@ -329,16 +399,29 @@ static int validate_request(const dixon_gui_request_t *request,
         return 0;
     }
 
-    if (!request->polynomials || request->polynomials[0] == '\0') {
-        set_error(error_message, error_message_size, "Polynomials are required.");
-        return 0;
-    }
-
     switch (request->mode) {
         case DIXON_GUI_MODE_SOLVE:
+            if (!request->polynomials || request->polynomials[0] == '\0') {
+                set_error(error_message, error_message_size, "Polynomials are required.");
+                return 0;
+            }
             return 1;
         case DIXON_GUI_MODE_RESULTANT:
+            if (!request->polynomials || request->polynomials[0] == '\0') {
+                set_error(error_message, error_message_size, "Polynomials are required.");
+                return 0;
+            }
+            if (!request->eliminate_vars || request->eliminate_vars[0] == '\0') {
+                set_error(error_message, error_message_size,
+                          "Elimination variables are required for this mode.");
+                return 0;
+            }
+            return 1;
         case DIXON_GUI_MODE_COMPLEXITY:
+            if (!request->polynomials || request->polynomials[0] == '\0') {
+                set_error(error_message, error_message_size, "Polynomials are required.");
+                return 0;
+            }
             if (!request->eliminate_vars || request->eliminate_vars[0] == '\0') {
                 set_error(error_message, error_message_size,
                           "Elimination variables are required for this mode.");
@@ -346,6 +429,10 @@ static int validate_request(const dixon_gui_request_t *request,
             }
             return 1;
         case DIXON_GUI_MODE_IDEAL:
+            if (!request->polynomials || request->polynomials[0] == '\0') {
+                set_error(error_message, error_message_size, "Polynomials are required.");
+                return 0;
+            }
             if (!request->eliminate_vars || request->eliminate_vars[0] == '\0') {
                 set_error(error_message, error_message_size,
                           "Elimination variables are required for ideal reduction.");
@@ -354,6 +441,19 @@ static int validate_request(const dixon_gui_request_t *request,
             if (!request->ideal_generators || request->ideal_generators[0] == '\0') {
                 set_error(error_message, error_message_size,
                           "Ideal generators are required for ideal reduction.");
+                return 0;
+            }
+            return 1;
+        case DIXON_GUI_MODE_RANDOM:
+            if (!request->random_degrees || request->random_degrees[0] == '\0') {
+                set_error(error_message, error_message_size,
+                          "Degree list is required for random mode.");
+                return 0;
+            }
+            if (request->random_mode < DIXON_GUI_RANDOM_RESULTANT ||
+                request->random_mode > DIXON_GUI_RANDOM_COMPLEXITY) {
+                set_error(error_message, error_message_size,
+                          "Random mode selection is invalid.");
                 return 0;
             }
             return 1;
@@ -491,6 +591,7 @@ int dixon_gui_run_request(const dixon_gui_request_t *request,
     char *vars = NULL;
     char *ideal = NULL;
     char *omega = NULL;
+    char *random_degrees = NULL;
     string_builder_t command = {0};
     SECURITY_ATTRIBUTES sa = {0};
     HANDLE output_file = INVALID_HANDLE_VALUE;
@@ -503,6 +604,7 @@ int dixon_gui_run_request(const dixon_gui_request_t *request,
     char output_path[DIXON_PATH_CAP] = {0};
     char working_dir[DIXON_PATH_CAP];
     char *last_slash;
+    char *actual_command_line = NULL;
     int saw_child_output = 0;
     int ok = 0;
 
@@ -567,6 +669,14 @@ int dixon_gui_run_request(const dixon_gui_request_t *request,
         omega = trim_copy(request->omega);
         if (!omega) {
             set_error(error_message, error_message_size, "Out of memory while copying the omega parameter.");
+            goto cleanup;
+        }
+    }
+
+    if (request->random_degrees) {
+        random_degrees = trim_copy(request->random_degrees);
+        if (!random_degrees) {
+            set_error(error_message, error_message_size, "Out of memory while copying the random degree list.");
             goto cleanup;
         }
     }
@@ -656,6 +766,41 @@ int dixon_gui_run_request(const dixon_gui_request_t *request,
                 goto cleanup;
             }
             break;
+        case DIXON_GUI_MODE_RANDOM:
+            if (request->random_mode == DIXON_GUI_RANDOM_SOLVE) {
+                if (!append_arg(&command, "--solve")) {
+                    set_error(error_message, error_message_size, "Out of memory while building the random solve command line.");
+                    goto cleanup;
+                }
+            } else if (request->random_mode == DIXON_GUI_RANDOM_COMPLEXITY) {
+                if (!append_arg(&command, "--comp")) {
+                    set_error(error_message, error_message_size, "Out of memory while building the random complexity command line.");
+                    goto cleanup;
+                }
+                if (omega && omega[0] != '\0') {
+                    if (!append_arg(&command, "--omega")) {
+                        set_error(error_message, error_message_size, "Out of memory while adding --omega to the random command line.");
+                        goto cleanup;
+                    }
+                    if (!append_arg(&command, omega)) {
+                        set_error(error_message, error_message_size, "Out of memory while appending omega to the random command line.");
+                        goto cleanup;
+                    }
+                }
+            }
+            if (!append_arg(&command, "--random")) {
+                set_error(error_message, error_message_size, "Out of memory while building the random command line.");
+                goto cleanup;
+            }
+            if (!append_arg(&command, random_degrees ? random_degrees : "")) {
+                set_error(error_message, error_message_size, "Out of memory while appending the random degree list to the command line.");
+                goto cleanup;
+            }
+            if (!append_arg(&command, field)) {
+                set_error(error_message, error_message_size, "Out of memory while appending the field to the random command line.");
+                goto cleanup;
+            }
+            break;
         default:
             set_error(error_message, error_message_size, "Unsupported mode.");
             goto cleanup;
@@ -702,8 +847,9 @@ int dixon_gui_run_request(const dixon_gui_request_t *request,
     si.hStdError = output_file;
 
     response->resolved_dixon_path = dup_string(path_to_use);
-    response->command_line = dup_string(command.data ? command.data : "");
-    if (!response->resolved_dixon_path || !response->command_line) {
+    actual_command_line = dup_string(command.data ? command.data : "");
+    response->command_line = make_display_command_line(actual_command_line);
+    if (!response->resolved_dixon_path || !actual_command_line || !response->command_line) {
         set_error(error_message, error_message_size,
                   "Out of memory while preparing the child process command line.");
         goto cleanup;
@@ -711,7 +857,7 @@ int dixon_gui_run_request(const dixon_gui_request_t *request,
 
     if (!CreateProcessA(
             response->resolved_dixon_path,
-            response->command_line,
+            actual_command_line,
             NULL,
             NULL,
             TRUE,
@@ -766,7 +912,8 @@ int dixon_gui_run_request(const dixon_gui_request_t *request,
     }
 
     response->stderr_text = dup_string("");
-    response->combined_output = dup_string(response->stdout_text ? response->stdout_text : "");
+    response->combined_output = compose_combined_output(response->command_line,
+                                                       response->stdout_text);
     if (!response->stderr_text || !response->combined_output) {
         set_error(error_message, error_message_size, "Out of memory while finalizing the GUI output text.");
         goto cleanup;
@@ -785,6 +932,8 @@ cleanup:
     free(vars);
     free(ideal);
     free(omega);
+    free(random_degrees);
+    free(actual_command_line);
     sb_free(&command);
 
     if (!ok) {
