@@ -8,6 +8,7 @@
 #include "dixon_wrapper.h"
 
 #define APP_TITLE "Dixon Windows GUI"
+#define TAB_COUNT 5
 
 #define ID_TAB 100
 #define ID_PATH_EDIT 102
@@ -20,7 +21,6 @@
 
 #define ID_SOLVE_POLYS 200
 #define ID_SOLVE_FIELD 201
-#define ID_SOLVE_VERBOSE 202
 
 #define ID_RES_POLYS 300
 #define ID_RES_VARS 301
@@ -36,7 +36,13 @@
 #define ID_IDEAL_VARS 502
 #define ID_IDEAL_FIELD 503
 
+#define ID_RAND_DEGREES 600
+#define ID_RAND_FIELD 601
+#define ID_RAND_MODE 602
+#define ID_RAND_OMEGA 603
+
 #define WM_DIXON_COMPLETE (WM_APP + 1)
+#define ID_TAB_TIMER 1
 
 typedef struct {
     HWND panel;
@@ -48,7 +54,6 @@ typedef struct {
     HWND edit3;
     HWND label4;
     HWND edit4;
-    HWND check1;
 } tab_controls_t;
 
 typedef struct {
@@ -71,9 +76,13 @@ static HWND g_input_group;
 static HWND g_output_group;
 static HFONT g_ui_font;
 static HFONT g_mono_font;
-static tab_controls_t g_tabs[4];
+static tab_controls_t g_tabs[TAB_COUNT];
 static HANDLE g_worker_thread = NULL;
 static int g_is_running = 0;
+static WNDPROC g_tab_wndproc = NULL;
+static int g_current_tab_index = -1;
+
+static void show_active_tab(void);
 
 static int max_int(int a, int b)
 {
@@ -130,6 +139,7 @@ static void set_edit_text(HWND edit, const char *text)
     SetWindowTextA(edit, normalized);
     free(normalized);
 }
+
 static char *get_edit_text(HWND edit)
 {
     int len = GetWindowTextLengthA(edit);
@@ -188,15 +198,41 @@ static HWND create_button(HWND parent, int id, const char *text, int x, int y, i
     return hwnd;
 }
 
-static HWND create_checkbox(HWND parent, int id, const char *text, int x, int y, int w, int h)
+static HWND create_combobox(HWND parent, int id, int x, int y, int w, int h)
 {
     HWND hwnd = CreateWindowExA(
-        0, "BUTTON", text,
-        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        0, "COMBOBOX", "",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
         x, y, w, h,
         parent, (HMENU) (INT_PTR) id, g_instance, NULL);
     apply_font(hwnd, g_ui_font);
     return hwnd;
+}
+
+static void update_random_mode_controls(void)
+{
+    int index = (int) SendMessageA(g_tabs[4].edit3, CB_GETCURSEL, 0, 0);
+    EnableWindow(g_tabs[4].label4, index == DIXON_GUI_RANDOM_COMPLEXITY);
+    EnableWindow(g_tabs[4].edit4, index == DIXON_GUI_RANDOM_COMPLEXITY);
+}
+
+static LRESULT CALLBACK tab_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
+{
+    LRESULT result;
+
+    result = CallWindowProcA(g_tab_wndproc, hwnd, msg, wparam, lparam);
+
+    switch (msg) {
+        case WM_LBUTTONUP:
+        case WM_KEYUP:
+        case WM_MOUSEWHEEL:
+            show_active_tab();
+            break;
+        default:
+            break;
+    }
+
+    return result;
 }
 
 static void show_active_tab(void)
@@ -204,9 +240,14 @@ static void show_active_tab(void)
     int current = TabCtrl_GetCurSel(g_tab);
     int i;
 
-    for (i = 0; i < 4; ++i) {
+    if (current < 0 || current >= TAB_COUNT) current = 0;
+    g_current_tab_index = current;
+
+    for (i = 0; i < TAB_COUNT; ++i) {
         ShowWindow(g_tabs[i].panel, i == current ? SW_SHOW : SW_HIDE);
     }
+
+    if (current == 4) update_random_mode_controls();
 }
 
 static void layout_tab_pages(void)
@@ -221,9 +262,9 @@ static void layout_tab_pages(void)
     TabCtrl_AdjustRect(g_tab, FALSE, &rc);
 
     page_w = max_int(rc.right - rc.left, 240);
-    page_h = max_int(rc.bottom - rc.top, 220);
+    page_h = max_int(rc.bottom - rc.top, 240);
 
-    for (i = 0; i < 4; ++i) {
+    for (i = 0; i < TAB_COUNT; ++i) {
         MoveWindow(g_tabs[i].panel, rc.left, rc.top, page_w, page_h, TRUE);
     }
 
@@ -250,7 +291,7 @@ static void layout_tab_pages(void)
         MoveWindow(g_tabs[1].label2, margin, row1_y, 140, 20, TRUE);
         MoveWindow(g_tabs[1].edit2, margin, row1_y + 22, page_w - margin * 2, 26, TRUE);
         MoveWindow(g_tabs[1].label3, margin, row2_y, 80, 20, TRUE);
-        MoveWindow(g_tabs[1].edit3, margin, row2_y + 22, 200, 26, TRUE);
+        MoveWindow(g_tabs[1].edit3, margin, row2_y + 22, 220, 26, TRUE);
     }
 
     {
@@ -264,9 +305,9 @@ static void layout_tab_pages(void)
         MoveWindow(g_tabs[2].label2, margin, row1_y, 140, 20, TRUE);
         MoveWindow(g_tabs[2].edit2, margin, row1_y + 22, page_w - margin * 2, 26, TRUE);
         MoveWindow(g_tabs[2].label3, margin, row2_y, 80, 20, TRUE);
-        MoveWindow(g_tabs[2].edit3, margin, row2_y + 22, 200, 26, TRUE);
-        MoveWindow(g_tabs[2].label4, 232, row2_y, 80, 20, TRUE);
-        MoveWindow(g_tabs[2].edit4, 232, row2_y + 22, 120, 26, TRUE);
+        MoveWindow(g_tabs[2].edit3, margin, row2_y + 22, 220, 26, TRUE);
+        MoveWindow(g_tabs[2].label4, 252, row2_y, 80, 20, TRUE);
+        MoveWindow(g_tabs[2].edit4, 252, row2_y + 22, 140, 26, TRUE);
     }
 
     {
@@ -294,6 +335,22 @@ static void layout_tab_pages(void)
         MoveWindow(g_tabs[3].label4, 252, row_y, 80, 20, TRUE);
         MoveWindow(g_tabs[3].edit4, 252, row_y + 22, 180, 26, TRUE);
     }
+
+    {
+        int label_y = 18;
+        int row1_y = 48;
+        int row2_y = row1_y + 60;
+        int row3_y = row2_y + 60;
+
+        MoveWindow(g_tabs[4].label1, margin, label_y, 120, 20, TRUE);
+        MoveWindow(g_tabs[4].edit1, margin, row1_y, page_w - margin * 2, 28, TRUE);
+        MoveWindow(g_tabs[4].label2, margin, row2_y, 80, 20, TRUE);
+        MoveWindow(g_tabs[4].edit2, margin, row2_y + 22, 220, 26, TRUE);
+        MoveWindow(g_tabs[4].label3, 264, row2_y, 80, 20, TRUE);
+        MoveWindow(g_tabs[4].edit3, 264, row2_y + 22, 220, 220, TRUE);
+        MoveWindow(g_tabs[4].label4, margin, row3_y, 80, 20, TRUE);
+        MoveWindow(g_tabs[4].edit4, margin, row3_y + 22, 140, 26, TRUE);
+    }
 }
 
 static void create_tab_pages(void)
@@ -310,6 +367,8 @@ static void create_tab_pages(void)
     TabCtrl_InsertItem(g_tab, 2, &item);
     item.pszText = "Ideal";
     TabCtrl_InsertItem(g_tab, 3, &item);
+    item.pszText = "Random";
+    TabCtrl_InsertItem(g_tab, 4, &item);
 
     g_tabs[0].panel = CreateWindowExA(0, "STATIC", "", WS_CHILD | WS_VISIBLE,
                                       0, 0, 10, 10, g_tab, NULL, g_instance, NULL);
@@ -319,11 +378,10 @@ static void create_tab_pages(void)
                                   0, 0, 10, 10,
                                   "x^2+y^2+z^2-6\r\nx+y+z-4\r\nx*y*z-x-1");
     g_tabs[0].label2 = create_label(g_tabs[0].panel, "Field", 0, 0, 10, 10);
-    g_tabs[0].edit2 = create_edit(g_tabs[0].panel, ID_SOLVE_FIELD, ES_LEFT,
+    g_tabs[0].edit2 = create_edit(g_tabs[0].panel, ID_SOLVE_FIELD, ES_LEFT | WS_TABSTOP,
                                   0, 0, 10, 10, "257");
-    g_tabs[0].check1 = NULL;
 
-    g_tabs[1].panel = CreateWindowExA(0, "STATIC", "", WS_CHILD,
+    g_tabs[1].panel = CreateWindowExA(0, "STATIC", "", WS_CHILD | WS_VISIBLE,
                                       0, 0, 10, 10, g_tab, NULL, g_instance, NULL);
     g_tabs[1].label1 = create_label(g_tabs[1].panel, "Polynomials", 0, 0, 10, 10);
     g_tabs[1].edit1 = create_edit(g_tabs[1].panel, ID_RES_POLYS,
@@ -331,13 +389,13 @@ static void create_tab_pages(void)
                                   0, 0, 10, 10,
                                   "x+y+z\r\nx*y+y*z+z*x\r\nx*y*z+1");
     g_tabs[1].label2 = create_label(g_tabs[1].panel, "Eliminate Variables", 0, 0, 10, 10);
-    g_tabs[1].edit2 = create_edit(g_tabs[1].panel, ID_RES_VARS, ES_LEFT,
+    g_tabs[1].edit2 = create_edit(g_tabs[1].panel, ID_RES_VARS, ES_LEFT | WS_TABSTOP,
                                   0, 0, 10, 10, "x,y");
     g_tabs[1].label3 = create_label(g_tabs[1].panel, "Field", 0, 0, 10, 10);
-    g_tabs[1].edit3 = create_edit(g_tabs[1].panel, ID_RES_FIELD, ES_LEFT,
+    g_tabs[1].edit3 = create_edit(g_tabs[1].panel, ID_RES_FIELD, ES_LEFT | WS_TABSTOP,
                                   0, 0, 10, 10, "257");
 
-    g_tabs[2].panel = CreateWindowExA(0, "STATIC", "", WS_CHILD,
+    g_tabs[2].panel = CreateWindowExA(0, "STATIC", "", WS_CHILD | WS_VISIBLE,
                                       0, 0, 10, 10, g_tab, NULL, g_instance, NULL);
     g_tabs[2].label1 = create_label(g_tabs[2].panel, "Polynomials", 0, 0, 10, 10);
     g_tabs[2].edit1 = create_edit(g_tabs[2].panel, ID_COMP_POLYS,
@@ -345,16 +403,16 @@ static void create_tab_pages(void)
                                   0, 0, 10, 10,
                                   "x^2+y^2+1\r\nx*y+z\r\nx+y+z^2");
     g_tabs[2].label2 = create_label(g_tabs[2].panel, "Eliminate Variables", 0, 0, 10, 10);
-    g_tabs[2].edit2 = create_edit(g_tabs[2].panel, ID_COMP_VARS, ES_LEFT,
+    g_tabs[2].edit2 = create_edit(g_tabs[2].panel, ID_COMP_VARS, ES_LEFT | WS_TABSTOP,
                                   0, 0, 10, 10, "x,y");
     g_tabs[2].label3 = create_label(g_tabs[2].panel, "Field", 0, 0, 10, 10);
-    g_tabs[2].edit3 = create_edit(g_tabs[2].panel, ID_COMP_FIELD, ES_LEFT,
+    g_tabs[2].edit3 = create_edit(g_tabs[2].panel, ID_COMP_FIELD, ES_LEFT | WS_TABSTOP,
                                   0, 0, 10, 10, "257");
     g_tabs[2].label4 = create_label(g_tabs[2].panel, "Omega", 0, 0, 10, 10);
-    g_tabs[2].edit4 = create_edit(g_tabs[2].panel, ID_COMP_OMEGA, ES_LEFT,
+    g_tabs[2].edit4 = create_edit(g_tabs[2].panel, ID_COMP_OMEGA, ES_LEFT | WS_TABSTOP,
                                   0, 0, 10, 10, "2.373");
 
-    g_tabs[3].panel = CreateWindowExA(0, "STATIC", "", WS_CHILD,
+    g_tabs[3].panel = CreateWindowExA(0, "STATIC", "", WS_CHILD | WS_VISIBLE,
                                       0, 0, 10, 10, g_tab, NULL, g_instance, NULL);
     g_tabs[3].label1 = create_label(g_tabs[3].panel, "Ideal Generators", 0, 0, 10, 10);
     g_tabs[3].edit1 = create_edit(g_tabs[3].panel, ID_IDEAL_GENS,
@@ -367,11 +425,29 @@ static void create_tab_pages(void)
                                   0, 0, 10, 10,
                                   "a1^2+a2^2+a3^2-10\r\na3^3-a1*a2-3");
     g_tabs[3].label3 = create_label(g_tabs[3].panel, "Eliminate Variables", 0, 0, 10, 10);
-    g_tabs[3].edit3 = create_edit(g_tabs[3].panel, ID_IDEAL_VARS, ES_LEFT,
+    g_tabs[3].edit3 = create_edit(g_tabs[3].panel, ID_IDEAL_VARS, ES_LEFT | WS_TABSTOP,
                                   0, 0, 10, 10, "a3");
     g_tabs[3].label4 = create_label(g_tabs[3].panel, "Field", 0, 0, 10, 10);
-    g_tabs[3].edit4 = create_edit(g_tabs[3].panel, ID_IDEAL_FIELD, ES_LEFT,
+    g_tabs[3].edit4 = create_edit(g_tabs[3].panel, ID_IDEAL_FIELD, ES_LEFT | WS_TABSTOP,
                                   0, 0, 10, 10, "257");
+
+    g_tabs[4].panel = CreateWindowExA(0, "STATIC", "", WS_CHILD | WS_VISIBLE,
+                                      0, 0, 10, 10, g_tab, NULL, g_instance, NULL);
+    g_tabs[4].label1 = create_label(g_tabs[4].panel, "Degree List", 0, 0, 10, 10);
+    g_tabs[4].edit1 = create_edit(g_tabs[4].panel, ID_RAND_DEGREES, ES_LEFT | WS_TABSTOP,
+                                  0, 0, 10, 10, "[3,3,2]");
+    g_tabs[4].label2 = create_label(g_tabs[4].panel, "Field", 0, 0, 10, 10);
+    g_tabs[4].edit2 = create_edit(g_tabs[4].panel, ID_RAND_FIELD, ES_LEFT | WS_TABSTOP,
+                                  0, 0, 10, 10, "257");
+    g_tabs[4].label3 = create_label(g_tabs[4].panel, "Mode", 0, 0, 10, 10);
+    g_tabs[4].edit3 = create_combobox(g_tabs[4].panel, ID_RAND_MODE, 0, 0, 10, 120);
+    SendMessageA(g_tabs[4].edit3, CB_ADDSTRING, 0, (LPARAM) "Resultant");
+    SendMessageA(g_tabs[4].edit3, CB_ADDSTRING, 0, (LPARAM) "Solve");
+    SendMessageA(g_tabs[4].edit3, CB_ADDSTRING, 0, (LPARAM) "Complexity");
+    SendMessageA(g_tabs[4].edit3, CB_SETCURSEL, DIXON_GUI_RANDOM_RESULTANT, 0);
+    g_tabs[4].label4 = create_label(g_tabs[4].panel, "Omega", 0, 0, 10, 10);
+    g_tabs[4].edit4 = create_edit(g_tabs[4].panel, ID_RAND_OMEGA, ES_LEFT | WS_TABSTOP,
+                                  0, 0, 10, 10, "2.373");
 
     layout_tab_pages();
     show_active_tab();
@@ -387,7 +463,7 @@ static void layout_main_window(HWND hwnd)
     int row_h = 28;
     int browse_w = 112;
     int label_w = 62;
-    int input_h = 404;
+    int input_h = 420;
     int button_y;
     int output_y;
     int output_h;
@@ -399,12 +475,12 @@ static void layout_main_window(HWND hwnd)
     height = rc.bottom - rc.top;
     content_width = width - margin * 2;
 
-    if (height < 760) input_h = 360;
-    if (height < 680) input_h = 320;
-    if (height > 920) input_h = 444;
+    if (height < 760) input_h = 376;
+    if (height < 680) input_h = 336;
+    if (height > 920) input_h = 456;
 
     if (input_h > height - 250) input_h = height - 250;
-    if (input_h < 250) input_h = 250;
+    if (input_h < 260) input_h = 260;
 
     MoveWindow(g_path_label, margin, path_y + 4, label_w, 20, TRUE);
     MoveWindow(g_path_edit, margin + label_w + 8, path_y,
@@ -497,14 +573,19 @@ static DWORD WINAPI worker_thread_proc(LPVOID param)
 {
     worker_result_t *result = (worker_result_t *) param;
     dixon_gui_response_init(&result->response);
-    result->ok = dixon_gui_run_request(&result->request, &result->response, result->error, sizeof(result->error));
+    result->ok = dixon_gui_run_request(&result->request, &result->response,
+                                       result->error, sizeof(result->error));
     PostMessageA(g_main_window, WM_DIXON_COMPLETE, 0, (LPARAM) result);
     return 0;
 }
 
 static void begin_request(void)
 {
-    int current = TabCtrl_GetCurSel(g_tab);
+    int current;
+
+    show_active_tab();
+    current = TabCtrl_GetCurSel(g_tab);
+    if (current < 0 || current >= TAB_COUNT) current = 0;
     worker_result_t *result;
     char *path;
 
@@ -546,6 +627,16 @@ static void begin_request(void)
             result->request.eliminate_vars = get_edit_text(g_tabs[3].edit3);
             result->request.field = get_edit_text(g_tabs[3].edit4);
             break;
+        case 4:
+            result->request.mode = DIXON_GUI_MODE_RANDOM;
+            result->request.random_degrees = get_edit_text(g_tabs[4].edit1);
+            result->request.field = get_edit_text(g_tabs[4].edit2);
+            result->request.random_mode = (int) SendMessageA(g_tabs[4].edit3, CB_GETCURSEL, 0, 0);
+            result->request.omega = get_edit_text(g_tabs[4].edit4);
+            if (result->request.random_mode == CB_ERR) {
+                result->request.random_mode = DIXON_GUI_RANDOM_RESULTANT;
+            }
+            break;
         default:
             free(path);
             free(result);
@@ -561,6 +652,7 @@ static void begin_request(void)
         free((void *) result->request.field);
         free((void *) result->request.ideal_generators);
         free((void *) result->request.omega);
+        free((void *) result->request.random_degrees);
         free(result);
         return;
     }
@@ -600,6 +692,7 @@ static void finish_request(worker_result_t *result)
     free((void *) result->request.field);
     free((void *) result->request.ideal_generators);
     free((void *) result->request.omega);
+    free((void *) result->request.random_degrees);
     dixon_gui_response_clear(&result->response);
     free(result);
 }
@@ -633,6 +726,7 @@ static LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
                                     0, 0, 10, 10,
                                     g_input_group, (HMENU) (INT_PTR) ID_TAB, g_instance, NULL);
             apply_font(g_tab, g_ui_font);
+            g_tab_wndproc = (WNDPROC) SetWindowLongPtrA(g_tab, GWLP_WNDPROC, (LONG_PTR) tab_wnd_proc);
             create_tab_pages();
 
             g_run_button = create_button(hwnd, ID_RUN, "Run", 0, 0, 10, 10);
@@ -651,12 +745,21 @@ static LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
             if (dixon_gui_find_default_cli(default_path, sizeof(default_path))) {
                 set_edit_text(g_path_edit, default_path);
             }
+            SetTimer(hwnd, ID_TAB_TIMER, 100, NULL);
             set_status("Ready");
             return 0;
         }
         case WM_SIZE:
             layout_main_window(hwnd);
             return 0;
+        case WM_TIMER:
+            if (wparam == ID_TAB_TIMER) {
+                int tab_index = TabCtrl_GetCurSel(g_tab);
+                if (tab_index < 0 || tab_index >= TAB_COUNT) tab_index = 0;
+                if (tab_index != g_current_tab_index) show_active_tab();
+                return 0;
+            }
+            break;
         case WM_COMMAND:
             switch (LOWORD(wparam)) {
                 case ID_PATH_BROWSE:
@@ -671,6 +774,12 @@ static LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
                 case ID_SAVE:
                     save_output();
                     return 0;
+                case ID_RAND_MODE:
+                    if (HIWORD(wparam) == CBN_SELCHANGE) {
+                        update_random_mode_controls();
+                        return 0;
+                    }
+                    break;
                 default:
                     break;
             }
@@ -685,6 +794,7 @@ static LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
             finish_request((worker_result_t *) lparam);
             return 0;
         case WM_DESTROY:
+            KillTimer(hwnd, ID_TAB_TIMER);
             if (g_worker_thread) {
                 WaitForSingleObject(g_worker_thread, INFINITE);
                 CloseHandle(g_worker_thread);
@@ -728,7 +838,7 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmd_line, 
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         1120,
-        900,
+        920,
         NULL,
         NULL,
         instance,
