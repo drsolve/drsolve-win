@@ -7,8 +7,15 @@ typedef enum {
     DIXON_GUI_MODE_SOLVE = 0,
     DIXON_GUI_MODE_RESULTANT = 1,
     DIXON_GUI_MODE_COMPLEXITY = 2,
-    DIXON_GUI_MODE_IDEAL = 3
+    DIXON_GUI_MODE_IDEAL = 3,
+    DIXON_GUI_MODE_RANDOM = 4
 } dixon_gui_mode_t;
+
+typedef enum {
+    DIXON_GUI_RANDOM_RESULTANT = 0,
+    DIXON_GUI_RANDOM_SOLVE = 1,
+    DIXON_GUI_RANDOM_COMPLEXITY = 2
+} dixon_gui_random_mode_t;
 
 typedef struct {
     dixon_gui_mode_t mode;
@@ -18,7 +25,9 @@ typedef struct {
     const char *field;
     const char *ideal_generators;
     const char *omega;
+    const char *random_degrees;
     int solve_verbose;
+    int random_mode;
 } dixon_gui_request_t;
 
 typedef struct {
