@@ -84,9 +84,7 @@ static const char *skip_program_name(const char *command_line)
                 p++;
                 break;
             }
-            if (*p == '\\' && p[1] != '\0') {
-                p++;
-            }
+            if (*p == '\\' && p[1] != '\0') p++;
             p++;
         }
     } else {
@@ -104,24 +102,6 @@ static int launcher_owns_console(void)
     return count == 1;
 }
 
-static void wait_for_enter_before_exit(void)
-{
-    char line[8];
-
-    fputs("\nPress Enter to close...", stdout);
-    fflush(stdout);
-
-    if (!fgets(line, sizeof(line), stdin)) {
-        Sleep(8000);
-    }
-}
-
-static int finish_process(int exit_code, int pause_on_exit)
-{
-    if (pause_on_exit) wait_for_enter_before_exit();
-    return exit_code;
-}
-
 static int configure_child_path(const char *dll_dir, char *error_message, size_t error_message_size)
 {
     char *old_path = dup_environment_value("PATH");
@@ -131,7 +111,8 @@ static int configure_child_path(const char *dll_dir, char *error_message, size_t
     int ok;
 
     if (!new_path) {
-        snprintf(error_message, error_message_size, "Out of memory while preparing PATH for runtime DLLs.");
+        snprintf(error_message, error_message_size,
+                 "Out of memory while preparing PATH for runtime DLLs.");
         free(old_path);
         return 0;
     }
@@ -153,13 +134,43 @@ static int configure_child_path(const char *dll_dir, char *error_message, size_t
     return ok ? 1 : 0;
 }
 
+static int launch_interactive_shell(void)
+{
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    char command_line[64] = "cmd.exe /K";
+
+    ZeroMemory(&si, sizeof(si));
+    GetStartupInfoA(&si);
+    si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
+
+    if (!CreateProcessA(NULL,
+                        command_line,
+                        NULL,
+                        NULL,
+                        TRUE,
+                        0,
+                        NULL,
+                        NULL,
+                        &si,
+                        &pi)) {
+        return 0;
+    }
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return 1;
+}
+
 int main(void)
 {
     char root_dir[DIXON_PATH_CAP];
     char dll_dir[DIXON_PATH_CAP];
     char real_cli[DIXON_PATH_CAP];
     const char *tail = skip_program_name(GetCommandLineA());
-    int pause_on_exit = (*tail == '\0' && launcher_owns_console());
+    int launch_shell_after_exit = (*tail == '\0' && launcher_owns_console());
     char *command_line = NULL;
     size_t needed;
     STARTUPINFOA si;
@@ -170,29 +181,31 @@ int main(void)
 
     if (!get_module_dir(root_dir, sizeof(root_dir))) {
         fprintf(stderr, "Failed to resolve the dixon.exe directory.\n");
-        return finish_process(1, pause_on_exit);
+        return 1;
     }
 
     if (!build_path(dll_dir, sizeof(dll_dir), root_dir, "dll")) {
         fprintf(stderr, "The DLL directory path is too long.\n");
-        return finish_process(1, pause_on_exit);
+        return 1;
     }
 
     if (!build_path(real_cli, sizeof(real_cli), root_dir, "bin\\dixon_cli_real.exe")) {
         fprintf(stderr, "The internal CLI path is too long.\n");
-        return finish_process(1, pause_on_exit);
+        return 1;
     }
 
     if (!configure_child_path(dll_dir, error_message, sizeof(error_message))) {
         fprintf(stderr, "%s\n", error_message);
-        return finish_process(1, pause_on_exit);
+        return 1;
     }
+
+    SetEnvironmentVariableA("DIXON_DISPLAY_NAME", "dixon.exe");
 
     needed = strlen(real_cli) + strlen(tail) + 4;
     command_line = (char *) malloc(needed);
     if (!command_line) {
         fprintf(stderr, "Out of memory while building the launcher command line.\n");
-        return finish_process(1, pause_on_exit);
+        return 1;
     }
 
     if (*tail) {
@@ -230,7 +243,7 @@ int main(void)
                         "Failed to start the internal CLI", GetLastError());
         fprintf(stderr, "%s\n", error_message);
         free(command_line);
-        return finish_process(1, pause_on_exit);
+        return 1;
     }
 
     free(command_line);
@@ -245,5 +258,10 @@ int main(void)
 
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
-    return finish_process((int) exit_code, pause_on_exit);
+
+    if (launch_shell_after_exit) {
+        launch_interactive_shell();
+    }
+
+    return (int) exit_code;
 }
