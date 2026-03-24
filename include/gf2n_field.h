@@ -6,18 +6,38 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#if defined(__x86_64__) || defined(__i386__)
+#define DIXON_X86_SIMD 1
 #include <immintrin.h>
+#include <cpuid.h>
+#else
+#define DIXON_X86_SIMD 0
+#endif
 #include <flint/flint.h>
 #include <flint/fq_nmod.h>
 #include <flint/nmod_poly.h>
 #include <gmp.h>
-#include <cpuid.h>
 #include <time.h>
 #include <assert.h>
 #include <math.h>
 
 #ifdef __cplusplus
 extern "C" {
+#endif
+
+#if __FLINT_VERSION < 3 || (__FLINT_VERSION == 3 && __FLINT_VERSION_MINOR < 1)
+  #ifdef fq_nmod_ctx_prime
+  #  undef fq_nmod_ctx_prime
+     static inline ulong fq_nmod_ctx_prime(const fq_nmod_ctx_t ctx) {
+         return fmpz_get_ui(&((ctx)->p));
+     }
+  #endif
+#endif
+
+#if __FLINT_VERSION < 3 || (__FLINT_VERSION == 3 && __FLINT_VERSION_MINOR < 2)
+  #define flint_rand_init     flint_randinit
+  #define flint_rand_set_seed flint_randseed
+  #define flint_rand_clear    flint_randclear
 #endif
 
 /* ============================================================================

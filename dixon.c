@@ -22,20 +22,13 @@
 #include "polynomial_system_solver.h"
 #include "dixon_test.h"
 
-#define PROGRAM_VERSION "0.1.0"
+#define PROGRAM_VERSION "0.1.1"
 
 #ifdef _WIN32
 #define DIXON_NULL_DEVICE "NUL"
 #else
 #define DIXON_NULL_DEVICE "/dev/null"
 #endif
-
-static const char *display_prog_name(const char *argv0)
-{
-    const char *env_name = getenv("DIXON_DISPLAY_NAME");
-    if (env_name && env_name[0] != '\0') return env_name;
-    return argv0;
-}
 
 /* =========================================================================
  * Print usage
@@ -125,7 +118,7 @@ static void print_usage(const char *prog_name)
 }
 
 /* =========================================================================
- * Utility helpers (unchanged from original)
+ * Utility helpers
  * ========================================================================= */
 static char *trim(char *str)
 {
@@ -136,6 +129,13 @@ static char *trim(char *str)
     while (end > str && isspace((unsigned char)*end)) end--;
     end[1] = '\0';
     return str;
+}
+
+static const char *display_prog_name(const char *argv0)
+{
+    const char *env_name = getenv("DIXON_DISPLAY_NAME");
+    if (env_name && env_name[0] != '\0') return env_name;
+    return argv0;
 }
 
 static int check_prime_power(const fmpz_t n, fmpz_t prime, ulong *power)
@@ -2171,7 +2171,6 @@ int main(int argc, char *argv[])
         }
 
         int orig_stdout = -1, orig_stderr = -1, devnull = -1;
-        int suppress_rational_trace = rational_mode && !silent_mode;
         if (silent_mode) {
             fflush(stdout); fflush(stderr);
             orig_stdout = dup(STDOUT_FILENO);
@@ -2182,8 +2181,6 @@ int main(int argc, char *argv[])
                 dup2(devnull, STDERR_FILENO);
                 close(devnull);
             }
-        } else if (suppress_rational_trace) {
-            redirect_stdio_to_devnull(&orig_stdout, &orig_stderr);
         }
 
         if (rational_mode) {
@@ -2199,8 +2196,6 @@ int main(int argc, char *argv[])
             dup2(orig_stdout, STDOUT_FILENO);
             dup2(orig_stderr, STDERR_FILENO);
             close(orig_stdout); close(orig_stderr);
-        } else if (suppress_rational_trace) {
-            restore_stdio(orig_stdout, orig_stderr);
         }
     }
 

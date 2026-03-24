@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "dixon_wrapper.h"
 
@@ -18,6 +19,7 @@
 #define ID_SAVE 106
 #define ID_STATUS 107
 #define ID_OUTPUT 108
+#define ID_OUTPUT_RESULT 109
 
 #define ID_SOLVE_POLYS 200
 #define ID_SOLVE_FIELD 201
@@ -69,6 +71,7 @@ static HWND g_path_label;
 static HWND g_tab;
 static HWND g_status;
 static HWND g_output;
+static HWND g_output_result;
 static HWND g_path_edit;
 static HWND g_run_button;
 static HWND g_save_button;
@@ -138,6 +141,175 @@ static void set_edit_text(HWND edit, const char *text)
 
     SetWindowTextA(edit, normalized);
     free(normalized);
+}
+
+static int is_space_char(char ch)
+{
+    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+}
+
+static void trim_span(const char **start, const char **end)
+{
+    while (*start < *end && is_space_char(**start)) (*start)++;
+    while (*end > *start && is_space_char((*end)[-1])) (*end)--;
+}
+
+static int extract_saved_path(const char *text, char *out, size_t out_size)
+{
+    const char *p = text;
+    int found = 0;
+
+    if (!out || out_size == 0) return 0;
+    out[0] = '\0';
+    if (!text) return 0;
+
+    while (p && *p) {
+        const char *line_start = p;
+        const char *line_end = strchr(line_start, '\n');
+        const char *line_trim_start = line_start;
+        const char *line_trim_end = line_end ? line_end : line_start + strlen(line_start);
+        const char *saved_to;
+        const char *colon;
+        const char *value_start;
+        const char *value_end;
+        size_t len;
+
+        trim_span(&line_trim_start, &line_trim_end);
+        saved_to = strstr(line_trim_start, "saved to");
+        if (!saved_to || saved_to >= line_trim_end) {
+            if (!line_end) break;
+            p = line_end + 1;
+            continue;
+        }
+
+        colon = strchr(saved_to, ':');
+        if (!colon || colon >= line_trim_end) {
+            if (!line_end) break;
+            p = line_end + 1;
+            continue;
+        }
+
+        value_start = colon + 1;
+        value_end = line_trim_end;
+        trim_span(&value_start, &value_end);
+        len = (size_t) (value_end - value_start);
+        if (len > 0) {
+            if (len >= out_size) len = out_size - 1;
+            memcpy(out, value_start, len);
+            out[len] = '\0';
+            found = 1;
+        }
+
+        if (!line_end) break;
+        p = line_end + 1;
+    }
+
+    return found;
+}
+
+static int is_absolute_path(const char *path)
+{
+    if (!path || !path[0]) return 0;
+    if ((path[0] == '\\' && path[1] == '\\') || path[0] == '/') return 1;
+    return isalpha((unsigned char) path[0]) && path[1] == ':';
+}
+
+static int join_result_path(const char *dixon_path, const char *saved_path, char *out, size_t out_size)
+{
+    char base[MAX_PATH];
+    char *last_slash;
+
+    if (!saved_path || !saved_path[0] || !out || out_size == 0) return 0;
+    if (is_absolute_path(saved_path)) {
+        if (snprintf(out, out_size, "%s", saved_path) >= (int) out_size) return 0;
+        return 1;
+    }
+
+    if (!dixon_path || !dixon_path[0]) return 0;
+    if (snprintf(base, sizeof(base), "%s", dixon_path) >= (int) sizeof(base)) return 0;
+    last_slash = strrchr(base, '\\');
+    if (!last_slash) last_slash = strrchr(base, '/');
+    if (last_slash) {
+        *last_slash = '\0';
+    } else {
+        snprintf(base, sizeof(base), ".");
+    }
+
+    if (snprintf(out, out_size, "%s\\%s", base, saved_path) >= (int) out_size) return 0;
+    return 1;
+}
+
+static char *read_text_file_limited(const char *path, size_t max_bytes)
+{
+    FILE *fp;
+    long file_size;
+    size_t read_size;
+    char *buffer;
+    size_t got;
+
+    if (!path || !path[0]) return NULL;
+    fp = fopen(path, "rb");
+    if (!fp) return NULL;
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        fclose(fp);
+        return NULL;
+    }
+    file_size = ftell(fp);
+    if (file_size < 0) {
+        fclose(fp);
+        return NULL;
+    }
+    if (fseek(fp, 0, SEEK_SET) != 0) {
+        fclose(fp);
+        return NULL;
+    }
+
+    read_size = (size_t) file_size;
+    if (read_size > max_bytes) read_size = max_bytes;
+    buffer = (char *) malloc(read_size + 1);
+    if (!buffer) {
+        fclose(fp);
+        return NULL;
+    }
+
+    got = fread(buffer, 1, read_size, fp);
+    buffer[got] = '\0';
+    fclose(fp);
+    return buffer;
+}
+
+static void update_result_output(worker_result_t *result)
+{
+    char saved_path[MAX_PATH];
+    char full_path[MAX_PATH];
+    char *content;
+
+    if (!result || !result->ok) {
+        set_edit_text(g_output_result, "");
+        return;
+    }
+
+    if (!extract_saved_path(result->response.stdout_text, saved_path, sizeof(saved_path))) {
+        set_edit_text(g_output_result, "No result/report file path found in output.");
+        return;
+    }
+
+    if (!join_result_path(result->request.dixon_path, saved_path, full_path, sizeof(full_path))) {
+        set_edit_text(g_output_result, "Failed to resolve result/report file path.");
+        return;
+    }
+
+    content = read_text_file_limited(full_path, 2 * 1024 * 1024);
+    if (!content) {
+        char message[512];
+        snprintf(message, sizeof(message),
+                 "Detected result/report file, but failed to read:\n%s", full_path);
+        set_edit_text(g_output_result, message);
+        return;
+    }
+
+    set_edit_text(g_output_result, content);
+    free(content);
 }
 
 static char *get_edit_text(HWND edit)
@@ -503,7 +675,17 @@ static void layout_main_window(HWND hwnd)
     if (output_h < 140) output_h = 140;
 
     MoveWindow(g_output_group, margin, output_y, content_width, output_h, TRUE);
-    MoveWindow(g_output, 12, 22, content_width - 24, output_h - 34, TRUE);
+    {
+        int inner_w = content_width - 24;
+        int inner_h = output_h - 34;
+        int split_gap = 10;
+        int left_w = (inner_w - split_gap) / 2;
+        int right_w = inner_w - split_gap - left_w;
+        if (left_w < 120) left_w = 120;
+        if (right_w < 120) right_w = 120;
+        MoveWindow(g_output, 12, 22, left_w, inner_h, TRUE);
+        MoveWindow(g_output_result, 12 + left_w + split_gap, 22, right_w, inner_h, TRUE);
+    }
 
     SendMessage(g_status, WM_SIZE, 0, 0);
 }
@@ -531,14 +713,43 @@ static void save_output(void)
 {
     OPENFILENAMEA ofn;
     char path[MAX_PATH] = "dixon_win_output.txt";
+    char *left_text;
+    char *right_text;
     char *text;
+    size_t left_len;
+    size_t right_len;
     FILE *fp;
 
-    text = get_edit_text(g_output);
-    if (!text || text[0] == '\0') {
-        free(text);
+    left_text = get_edit_text(g_output);
+    right_text = get_edit_text(g_output_result);
+    left_len = left_text ? strlen(left_text) : 0;
+    right_len = right_text ? strlen(right_text) : 0;
+    if (left_len == 0 && right_len == 0) {
+        free(left_text);
+        free(right_text);
         MessageBoxA(g_main_window, "There is no output to save.", APP_TITLE, MB_OK | MB_ICONINFORMATION);
         return;
+    }
+
+    if (left_len > 0 && right_len > 0) {
+        size_t sep_len = 4;
+        text = (char *) malloc(left_len + sep_len + right_len + 1);
+        if (!text) {
+            free(left_text);
+            free(right_text);
+            MessageBoxA(g_main_window, "Out of memory while preparing output text.", APP_TITLE, MB_OK | MB_ICONERROR);
+            return;
+        }
+        memcpy(text, left_text, left_len);
+        memcpy(text + left_len, "\r\n\r\n", sep_len);
+        memcpy(text + left_len + sep_len, right_text, right_len);
+        text[left_len + sep_len + right_len] = '\0';
+    } else if (left_len > 0) {
+        text = left_text;
+        left_text = NULL;
+    } else {
+        text = right_text;
+        right_text = NULL;
     }
 
     ZeroMemory(&ofn, sizeof(ofn));
@@ -561,11 +772,14 @@ static void save_output(void)
     }
 
     free(text);
+    free(left_text);
+    free(right_text);
 }
 
 static void clear_all(void)
 {
     set_edit_text(g_output, "");
+    set_edit_text(g_output_result, "");
     set_status("Ready");
 }
 
@@ -667,6 +881,7 @@ static void finish_request(worker_result_t *result)
 {
     if (result->ok) {
         set_edit_text(g_output, result->response.combined_output);
+        update_result_output(result);
         if (result->response.exit_code == 0) {
             set_status("Finished successfully");
         } else {
@@ -674,6 +889,7 @@ static void finish_request(worker_result_t *result)
         }
     } else {
         set_edit_text(g_output, result->error);
+        set_edit_text(g_output_result, "");
         set_status("Failed to run dixon.exe");
     }
 
@@ -737,6 +953,9 @@ static LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
             g_output = create_edit(g_output_group, ID_OUTPUT,
                                    ES_LEFT | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL | WS_TABSTOP,
                                    0, 0, 10, 10, "");
+            g_output_result = create_edit(g_output_group, ID_OUTPUT_RESULT,
+                                          ES_LEFT | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL | WS_TABSTOP,
+                                          0, 0, 10, 10, "");
 
             g_status = CreateWindowExA(0, STATUSCLASSNAMEA, "", WS_CHILD | WS_VISIBLE,
                                        0, 0, 0, 0, hwnd, (HMENU) (INT_PTR) ID_STATUS, g_instance, NULL);
