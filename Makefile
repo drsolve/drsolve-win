@@ -8,15 +8,14 @@ INCLUDE_DIR := include
 WIN_GUI_DIR := win_gui
 BUILD_DIR ?= build
 THIRD_PARTY_DIR := third_party
-RUNTIME_DIR := runtime
 BIN_DIR ?= bin
 DLL_DIR ?= dll
 LIB_DIR ?= lib
 
 MINGW_INCLUDE_DIR := $(THIRD_PARTY_DIR)/mingw/include
-FLINT_LIB_DIR := $(THIRD_PARTY_DIR)/flint/lib
+FLINT_LIB_DIR := $(THIRD_PARTY_DIR)/lib
 PML_INCLUDE_DIR := $(THIRD_PARTY_DIR)/pml/include
-PML_LIB_DIR := $(THIRD_PARTY_DIR)/pml/lib
+PML_LIB_DIR := $(THIRD_PARTY_DIR)/lib
 
 DIXON_TARGET ?= dixon.exe
 DIXON_REAL_TARGET ?= $(BIN_DIR)/dixon_cli_real.exe
@@ -32,9 +31,7 @@ CPPFLAGS += -DHAVE_FLINT -DHAVE_PML
 INCLUDE_FLAGS := -I$(INCLUDE_DIR) -I$(PML_INCLUDE_DIR) -I$(MINGW_INCLUDE_DIR)
 CLI_LIB_DIRS := -L$(FLINT_LIB_DIR) -L$(PML_LIB_DIR)
 CLI_LIBS := -lflint -lpml -lmpfr -lgmp -lopenblas -lm -lpthread
-GUI_LIBS := -lcomctl32 -lcomdlg32 -lshlwapi
-RUNTIME_DLLS := $(wildcard $(RUNTIME_DIR)/*.dll)
-RUNTIME_PML_VERSIONED := $(RUNTIME_DIR)/libpml.1.0.0.dll
+GUI_LIBS := -lcomctl32 -lcomdlg32 -lshlwapi -lwinmm
 
 MATH_SOURCES = $(SRC_DIR)/dixon_complexity.c \
                $(SRC_DIR)/dixon_flint.c \
@@ -56,14 +53,16 @@ MATH_SOURCES = $(SRC_DIR)/dixon_complexity.c \
                $(SRC_DIR)/resultant_with_ideal_reduction.c \
                $(SRC_DIR)/unified_mpoly_det.c \
                $(SRC_DIR)/unified_mpoly_interface.c \
-               $(SRC_DIR)/unified_mpoly_resultant.c
+               $(SRC_DIR)/unified_mpoly_resultant.c \
+               $(SRC_DIR)/rational_system_solver.c \
+               $(SRC_DIR)/fmpq_acb_roots.c
 
 MATH_OBJECTS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(MATH_SOURCES))
 WIN_GUI_SOURCES := $(WIN_GUI_DIR)/dixon_gui.c $(WIN_GUI_DIR)/dixon_wrapper.c
 
-.PHONY: all clean runtime show-config package-layout
+.PHONY: all clean show-config package-layout
 
-all: $(DIXON_TARGET) $(DIXON_REAL_TARGET) $(WIN_GUI_TARGET) $(DIXON_DLL) runtime
+all: $(DIXON_TARGET) $(DIXON_REAL_TARGET) $(WIN_GUI_TARGET) $(DIXON_DLL)
 
 $(BUILD_DIR) $(BIN_DIR) $(DLL_DIR) $(LIB_DIR):
 	mkdir -p $@
@@ -86,14 +85,10 @@ $(DIXON_TARGET): $(LAUNCHER_SOURCE)
 $(WIN_GUI_TARGET): $(WIN_GUI_SOURCES)
 	$(CC) $(GUI_CFLAGS) -mwindows -o $@ $(WIN_GUI_SOURCES) $(GUI_LIBS)
 
-runtime: | $(DLL_DIR)
-	@if [ -n "$(RUNTIME_DLLS)" ]; then cp -f $(RUNTIME_DIR)/*.dll $(DLL_DIR)/; fi
-	@if [ -f "$(RUNTIME_PML_VERSIONED)" ]; then cp -f $(RUNTIME_PML_VERSIONED) $(DLL_DIR)/; fi
-
 package-layout:
 	@echo "root executables: $(DIXON_TARGET) $(WIN_GUI_TARGET)"
 	@echo "internal cli     : $(DIXON_REAL_TARGET)"
-	@echo "runtime dlls     : $(DLL_DIR)/"
+	@echo "dlls             : $(DLL_DIR)/"
 	@echo "link libraries   : $(LIB_DIR)/"
 
 show-config:
@@ -109,6 +104,5 @@ show-config:
 	@echo "LIB_DIR           = $(LIB_DIR)"
 
 clean:
-	rm -rf $(BUILD_DIR) $(BIN_DIR) $(DLL_DIR) $(LIB_DIR) $(DIXON_TARGET) $(WIN_GUI_TARGET) dixon_cli_real.exe
+	rm -rf $(BUILD_DIR) $(BIN_DIR) $(LIB_DIR) $(DIXON_TARGET) $(WIN_GUI_TARGET) dixon_cli_real.exe
 	rm -f libdixon-1.a libdixon-1.dll libdixon-1.dll.a libdixon-win.a
-	rm -f libflint-22.dll libgcc_s_seh-1.dll libgfortran-5.dll libgmp-10.dll libgomp-1.dll libmpfr-6.dll libopenblas.dll libpml.1.0.0.dll libpml.dll libquadmath-0.dll libwinpthread-1.dll

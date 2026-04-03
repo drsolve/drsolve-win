@@ -5,11 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <mmsystem.h>
 
 #include "dixon_wrapper.h"
 
 #define APP_TITLE "Dixon Windows GUI"
-#define TAB_COUNT 5
+#define TAB_COUNT 6
 
 #define ID_TAB 100
 #define ID_PATH_EDIT 102
@@ -43,8 +44,15 @@
 #define ID_RAND_MODE 602
 #define ID_RAND_OMEGA 603
 
+#define ID_MUSIC_PLAY 700
+#define ID_MUSIC_PAUSE 701
+#define ID_MUSIC_STOP 702
+#define ID_MUSIC_PROGRESS 703
+#define ID_MUSIC_LYRICS 704
+
 #define WM_DIXON_COMPLETE (WM_APP + 1)
 #define ID_TAB_TIMER 1
+#define ID_MUSIC_TIMER 2
 
 typedef struct {
     HWND panel;
@@ -85,7 +93,34 @@ static int g_is_running = 0;
 static WNDPROC g_tab_wndproc = NULL;
 static int g_current_tab_index = -1;
 
+static HWND g_music_play_button;
+static HWND g_music_pause_button;
+static HWND g_music_stop_button;
+static HWND g_music_progress;
+static HWND g_music_lyrics;
+static HWND g_music_time_label;
+static int g_music_playing = 0;
+static WNDPROC g_original_panel_proc = NULL;
+
+// 歌词结构
+typedef struct {
+    int time;
+    char text[256];
+} lyric_t;
+
+static lyric_t g_lyrics[100];
+static int g_lyric_count = 0;
+static int g_current_lyric = -1;
+
 static void show_active_tab(void);
+static void init_music(void);
+static void play_music(void);
+static void pause_music(void);
+static void stop_music(void);
+static void parse_lyrics(void);
+static void update_lyrics(void);
+static int get_music_position(void);
+static LRESULT CALLBACK panel_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
 
 static int max_int(int a, int b)
 {
@@ -523,6 +558,28 @@ static void layout_tab_pages(void)
         MoveWindow(g_tabs[4].label4, margin, row3_y, 80, 20, TRUE);
         MoveWindow(g_tabs[4].edit4, margin, row3_y + 22, 140, 26, TRUE);
     }
+
+    { // Music tab layout
+        int button_y = 20;
+        int button_w = 80;
+        int button_h = 30;
+        int button_gap = 10;
+        int progress_y = button_y + button_h + 20;
+        int lyrics_y = progress_y + 40;
+        int lyrics_h = page_h - lyrics_y - 20;
+
+        MoveWindow(g_music_play_button, margin, button_y, button_w, button_h, TRUE);
+        MoveWindow(g_music_pause_button, margin + button_w + button_gap, button_y, button_w, button_h, TRUE);
+        MoveWindow(g_music_stop_button, margin + (button_w + button_gap) * 2, button_y, button_w, button_h, TRUE);
+        MoveWindow(g_music_progress, margin, progress_y, page_w - margin * 2 - 100, 25, TRUE);
+        MoveWindow(g_music_time_label, page_w - margin - 100, progress_y, 100, 25, TRUE);
+        MoveWindow(g_music_lyrics, margin, lyrics_y, page_w - margin * 2, lyrics_h, TRUE);
+        
+        // Force redraw of all music controls
+        RedrawWindow(g_music_progress, NULL, NULL, RDW_FRAME | RDW_INVALIDATE | RDW_UPDATENOW);
+        RedrawWindow(g_music_time_label, NULL, NULL, RDW_FRAME | RDW_INVALIDATE | RDW_UPDATENOW);
+        RedrawWindow(g_music_lyrics, NULL, NULL, RDW_FRAME | RDW_INVALIDATE | RDW_UPDATENOW);
+    }
 }
 
 static void create_tab_pages(void)
@@ -541,6 +598,8 @@ static void create_tab_pages(void)
     TabCtrl_InsertItem(g_tab, 3, &item);
     item.pszText = "Random";
     TabCtrl_InsertItem(g_tab, 4, &item);
+    item.pszText = "Music";
+    TabCtrl_InsertItem(g_tab, 5, &item);
 
     g_tabs[0].panel = CreateWindowExA(0, "STATIC", "", WS_CHILD | WS_VISIBLE,
                                       0, 0, 10, 10, g_tab, NULL, g_instance, NULL);
@@ -620,6 +679,62 @@ static void create_tab_pages(void)
     g_tabs[4].label4 = create_label(g_tabs[4].panel, "Omega", 0, 0, 10, 10);
     g_tabs[4].edit4 = create_edit(g_tabs[4].panel, ID_RAND_OMEGA, ES_LEFT | WS_TABSTOP,
                                   0, 0, 10, 10, "2.373");
+
+    g_tabs[5].panel = CreateWindowExA(0, "STATIC", "", WS_CHILD | WS_VISIBLE,
+                                      0, 0, 10, 10, g_tab, NULL, g_instance, NULL);
+    // Save original window procedure and set our custom procedure
+    g_original_panel_proc = (WNDPROC) SetWindowLongPtrA(g_tabs[5].panel, GWLP_WNDPROC, (LONG_PTR) panel_wnd_proc);
+    
+    g_music_play_button = create_button(g_tabs[5].panel, ID_MUSIC_PLAY, "Play", 0, 0, 10, 10);
+    g_music_pause_button = create_button(g_tabs[5].panel, ID_MUSIC_PAUSE, "Pause", 0, 0, 10, 10);
+    g_music_stop_button = create_button(g_tabs[5].panel, ID_MUSIC_STOP, "Stop", 0, 0, 10, 10);
+    
+    // Create progress bar with PBS_SMOOTH style for better visualization
+    g_music_progress = CreateWindowExA(0, "msctls_progress32", "",
+                                      WS_CHILD | WS_VISIBLE | PBS_SMOOTH,
+                                      0, 0, 10, 10,
+                                      g_tabs[5].panel, (HMENU) (INT_PTR) ID_MUSIC_PROGRESS, g_instance, NULL);
+    // Initialize progress bar range and position
+    SendMessageA(g_music_progress, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
+    SendMessageA(g_music_progress, PBM_SETPOS, 0, 0);
+    // Set progress bar color (blue)
+    SendMessageA(g_music_progress, PBM_SETBARCOLOR, 0, RGB(0, 122, 204));
+    // Force initial redraw
+    RedrawWindow(g_music_progress, NULL, NULL, RDW_FRAME | RDW_INVALIDATE | RDW_UPDATENOW);
+    
+    // 创建时间显示标签
+    g_music_time_label = create_label(g_tabs[5].panel, "00:00 / 00:00", 0, 0, 10, 10);
+    
+    // Create lyrics display area
+    g_music_lyrics = create_edit(g_tabs[5].panel, ID_MUSIC_LYRICS,
+                                ES_LEFT | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL | WS_TABSTOP,
+                                0, 0, 10, 10,
+                                "Click Play to start music...");
+    
+    // Show initial lyrics (first three lines) immediately when tab is created
+    if (g_lyric_count > 0) {
+        char lyric_text[1024] = "";
+        
+        // Show first three lines
+        if (g_lyric_count >= 3) {
+            strcat(lyric_text, g_lyrics[0].text);
+            strcat(lyric_text, "\r\n");
+            strcat(lyric_text, g_lyrics[1].text);
+            strcat(lyric_text, "\r\n");
+            strcat(lyric_text, g_lyrics[2].text);
+        } else if (g_lyric_count == 2) {
+            strcat(lyric_text, g_lyrics[0].text);
+            strcat(lyric_text, "\r\n");
+            strcat(lyric_text, g_lyrics[1].text);
+        } else if (g_lyric_count == 1) {
+            strcat(lyric_text, g_lyrics[0].text);
+        }
+        
+        set_edit_text(g_music_lyrics, lyric_text);
+    }
+
+    // 初始化音乐
+    init_music();
 
     layout_tab_pages();
     show_active_tab();
@@ -774,6 +889,436 @@ static void save_output(void)
     free(text);
     free(left_text);
     free(right_text);
+}
+
+static void init_music(void)
+{
+    // Initialize music-related controls
+    parse_lyrics();
+}
+
+static void parse_lyrics(void)
+{
+    // Parse lyrics with timestamps
+    g_lyric_count = 0;
+    
+    // Lyric data
+    static char lyric_data[] = 
+        "[00:00.001]Dixon Song\n"
+        "[00:10.020](Verse1)\n"
+        "[00:10.200]When the system's full of equations, hard to crack,\n"
+        "[00:16.140]Groebner bases are powerful, yet slow to come back.\n"
+        "[00:20.280]Zero-dimensional is all they know,that's such a shame,\n"
+        "[00:26.790]FGLM can't help you when the unknowns aren't the same.\n"
+        "[00:29.940](Chorus)\n"
+        "[00:31.200]Oh, Dixon, Dixon, where'd you go?\n"
+        "[00:33.600]Dixon, Dixon, steal the show.\n"
+        "[00:36.060]Oh, Dixon, Dixon, where'd you go?\n"
+        "[00:38.820]Dixon, Dixon, steal the show.\n"
+        "[00:41.640](Verse2)\n"
+        "[00:47.460]Sylvester's old and slow, one variable at a time,\n"
+        "[00:53.040]For multivariate systems,that's a weary climb.\n"
+        "[00:56.610]But Dixon builds one matrix, knocks out several at once,\n"
+        "[01:01.890]Eliminates in one go, no more this clunky grind.\n"
+        "[01:06.270](Chorus)\n"
+        "[01:07.290]Oh, Dixon, Dixon,where'd you go?\n"
+        "[01:09.960]Dixon, Dixon, steal the show.\n"
+        "[01:12.420]Oh, Dixon, Dixon,where'd you go?\n"
+        "[01:15.180]Dixon, Dixon, steal the show.\n"
+        "[01:17.850](Verse3)\n"
+        "[01:22.860]We count the lattice paths, we bound the matrix size,\n"
+        "[01:27.780]Complexity gets tighter now, no more surprise.\n"
+        "[01:32.940]Over-determined, under-determined, both we face,\n"
+        "[01:38.550]Dixon fills the gap and finds its place.\n"
+        "[01:42.090](Chorus)\n"
+        "[01:43.620]Oh, Dixon, Dixon, where'd you go?\n"
+        "[01:46.260]Dixon, Dixon, steal the show.\n"
+        "[01:48.780]Oh, Dixon, Dixon, where'd you go?\n"
+        "[01:51.540]Dixon, Dixon, steal the show.\n"
+        "[01:53.670](Verse4)\n"
+        "[01:59.100]We coded it in C, open-source and fast,\n"
+        "[02:05.460]Submatrix selection makes the extraneous past.\n"
+        "[02:08.970]Magma and msolve, they're strong, they're great,\n"
+        "[02:14.520]But Dixon holds its own, don't underestimate.\n"
+        "[02:18.810](Chorus)\n"
+        "[02:20.760]Oh, Dixon, Dixon, where'd you go?\n"
+        "[02:22.950]Dixon, Dixon, steal the show.\n"
+        "[02:25.230]Oh, Dixon, Dixon, where'd you go?\n"
+        "[02:27.240]Dixon, Dixon, steal the show.\n"
+        "[02:29.970](Verse5)\n"
+        "[02:37.440]From AO primitives to algebraic insight,\n"
+        "[02:40.800]Algebraic attacks are coming, day and night.\n"
+        "[02:45.030]We ran the Dixon, we counted every round,\n"
+        "[02:50.940]Our estimates are lower, new boundswe've found.\n"
+        "[02:55.020](Chorus)\n"
+        "[02:56.820]Oh, Dixon, Dixon, where'd you go?\n"
+        "[02:58.920]Dixon, Dixon, steal the show.\n"
+        "[03:01.200]Oh, Dixon, Dixon, where'd you go?\n"
+        "[03:04.140]Dixon, Dixon, steal~\n"
+        "[03:07.170]Oh, Dixon, Dixon, now we know,\n"
+        "[03:09.300]Dixon, Dixon, steals the show.\n"
+        "[03:11.790]Oh, Dixon, Dixon, now we know,\n"
+        "[03:14.580]Dixon, Dixon, steal~\n"
+        "[03:17.220]Oh, Dixon, Dixon, where'd you go?\n"
+        "[03:19.680]Dixon, Dixon, steals the show.\n"
+        "[03:22.110]Oh, Dixon, Dixon, where'd you go?\n"
+        "[03:24.930]Dixon, Dixon, steals the show.\n"
+        "[03:30.000](Finale)\n"
+        "[03:32.370]Oh, Dixon, Dixon, now we know,\n"
+        "[03:35.130]Dixon, Dixon, steals the show.\n"
+        "[03:37.680]Oh, Dixon, Dixon, now we know,\n"
+        "[03:40.500]Dixon, Dixon, steals the show.";
+    
+    char* line = strtok(lyric_data, "\n");
+    while (line && g_lyric_count < 100) {
+        // Parse timestamp
+        if (line[0] == '[') {
+            int minutes, seconds, milliseconds;
+            if (sscanf(line, "[%d:%d.%d]", &minutes, &seconds, &milliseconds) == 3) {
+                g_lyrics[g_lyric_count].time = minutes * 60000 + seconds * 1000 + milliseconds;
+                // Extract lyric content
+                char* text_start = strchr(line, ']');
+                if (text_start) {
+                    strncpy(g_lyrics[g_lyric_count].text, text_start + 1, sizeof(g_lyrics[g_lyric_count].text) - 1);
+                    g_lyric_count++;
+                }
+            }
+        }
+        line = strtok(NULL, "\n");
+    }
+}
+
+static int get_music_position(void)
+{
+    // Get current music playback position (milliseconds)
+    char buffer[256];
+    
+    // Directly get playback position using mciSendStringA
+    if (mciSendStringA("status dixon_song position", buffer, sizeof(buffer), NULL) == 0) {
+        return atoi(buffer);
+    }
+    
+    return 0;
+}
+
+static void update_lyrics(void)
+{
+    // Update lyrics display based on current playback position
+    if (!g_music_playing || g_lyric_count == 0) return;
+    
+    int position = get_music_position();
+    
+    // Update progress bar and time label
+    if (g_music_progress && g_music_time_label) {
+        // Get total music length
+        char length_buffer[256];
+        mciSendStringA("status dixon_song length", length_buffer, sizeof(length_buffer), NULL);
+        int total_length = atoi(length_buffer);
+        
+        if (total_length > 0) {
+            // Calculate progress percentage
+            int progress = (position * 100) / total_length;
+            // Update progress bar
+            SendMessageA(g_music_progress, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
+            SendMessageA(g_music_progress, PBM_SETPOS, progress, 0);
+            // Force redraw of progress bar
+            RedrawWindow(g_music_progress, NULL, NULL, RDW_FRAME | RDW_INVALIDATE | RDW_UPDATENOW);
+            
+            // Update time label
+            int current_minutes = position / 60000;
+            int current_seconds = (position % 60000) / 1000;
+            int total_minutes = total_length / 60000;
+            int total_seconds = (total_length % 60000) / 1000;
+            char time_buffer[32];
+            sprintf(time_buffer, "%02d:%02d / %02d:%02d", current_minutes, current_seconds, total_minutes, total_seconds);
+            SetWindowTextA(g_music_time_label, time_buffer);
+        }
+    }
+    
+    // Find current lyric to display
+    int new_lyric = -1;
+    for (int i = 0; i < g_lyric_count; i++) {
+        if (g_lyrics[i].time <= position) {
+            new_lyric = i;
+        } else {
+            break;
+        }
+    }
+    
+    // Always update display to ensure sync after seeking
+    g_current_lyric = new_lyric;
+    if (g_current_lyric >= 0 && g_current_lyric < g_lyric_count) {
+        // Display five lines of lyrics, with current lyric in the middle
+        char lyric_text[2048] = "";
+        
+        // Calculate start index
+        int start_index = g_current_lyric - 2;
+        if (start_index < 0) start_index = 0;
+        
+        // Calculate end index
+        int end_index = g_current_lyric + 2;
+        if (end_index >= g_lyric_count) end_index = g_lyric_count - 1;
+        
+        // Add empty lines if needed at the beginning
+        int empty_lines_before = 2 - (g_current_lyric - start_index);
+        for (int i = 0; i < empty_lines_before; i++) {
+            strcat(lyric_text, "\r\n");
+        }
+        
+        // Display lyrics lines
+        for (int i = start_index; i <= end_index; i++) {
+            strcat(lyric_text, g_lyrics[i].text);
+            if (i < end_index) {
+                strcat(lyric_text, "\r\n");
+            }
+        }
+        
+        // Add empty lines if needed at the end
+        int empty_lines_after = 2 - (end_index - g_current_lyric);
+        for (int i = 0; i < empty_lines_after; i++) {
+            strcat(lyric_text, "\r\n");
+        }
+        
+        set_edit_text(g_music_lyrics, lyric_text);
+    }
+}
+
+static LRESULT CALLBACK panel_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
+{
+    switch (msg) {
+        case WM_COMMAND:
+            // Pass button click events to main window
+            if (g_main_window) {
+                SendMessageA(g_main_window, WM_COMMAND, wparam, lparam);
+                return 0;
+            }
+            break;
+        case WM_LBUTTONDOWN: {
+            // Check if click is on progress bar
+            POINT pt;
+            pt.x = LOWORD(lparam);
+            pt.y = HIWORD(lparam);
+            
+            // Get progress bar window rectangle relative to panel
+            RECT progress_rect;
+            GetWindowRect(g_music_progress, &progress_rect);
+            MapWindowPoints(NULL, hwnd, (LPPOINT)&progress_rect, 2);
+            
+            // Check if click is within progress bar
+            if (PtInRect(&progress_rect, pt)) {
+                // Convert point to progress bar client coordinates
+                MapWindowPoints(hwnd, g_music_progress, &pt, 1);
+                
+                // Get progress bar client area
+                RECT rect;
+                GetClientRect(g_music_progress, &rect);
+                
+                // Calculate progress percentage at click position
+                int progress = (pt.x * 100) / (rect.right - rect.left);
+                
+                // Get total music length
+                char length_buffer[256];
+                mciSendStringA("status dixon_song length", length_buffer, sizeof(length_buffer), NULL);
+                int total_length = atoi(length_buffer);
+                
+                if (total_length > 0) {
+                    // Set time format to milliseconds before seeking
+                    mciSendStringA("set dixon_song time format milliseconds", NULL, 0, NULL);
+                    
+                    // Calculate target position (in milliseconds)
+                    int target_position = (progress * total_length) / 100;
+                    
+                    // Set music playback position
+                    char command[256];
+                    sprintf(command, "seek dixon_song to %d", target_position);
+                    mciSendStringA(command, NULL, 0, NULL);
+                    
+                    // Resume playback if already playing, or start if not
+                    mciSendStringA("play dixon_song", NULL, 0, NULL);
+                    g_music_playing = 1;
+                    SetTimer(g_main_window, ID_MUSIC_TIMER, 100, NULL);
+                    
+                    // Update lyrics immediately after seeking
+                    g_current_lyric = -1; // Force update
+                    update_lyrics();
+                }
+                
+                return 0;
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    
+    // Call original window procedure for all other messages
+    if (g_original_panel_proc) {
+        return CallWindowProcA(g_original_panel_proc, hwnd, msg, wparam, lparam);
+    }
+    return DefWindowProcA(hwnd, msg, wparam, lparam);
+}
+
+static void play_music(void)
+{
+    // Play music
+    char music_path[MAX_PATH];
+    char command[512];
+    char error_buffer[256];
+    
+    // Output debug information
+    OutputDebugStringA("Play button clicked\n");
+    
+    // Get current directory and build file path
+    GetCurrentDirectoryA(MAX_PATH, music_path);
+    OutputDebugStringA("Current directory: ");
+    OutputDebugStringA(music_path);
+    OutputDebugStringA("\n");
+    
+    strcat(music_path, "\\DixonSong.mp3");
+    OutputDebugStringA("Music path: ");
+    OutputDebugStringA(music_path);
+    OutputDebugStringA("\n");
+    
+    // Check if file exists
+    if (GetFileAttributesA(music_path) == INVALID_FILE_ATTRIBUTES) {
+        OutputDebugStringA("File does not exist\n");
+        MessageBoxA(g_main_window, "DixonSong.mp3 not found", "Error", MB_OK | MB_ICONERROR);
+        return;
+    } else {
+        OutputDebugStringA("File exists\n");
+    }
+    
+    // Check if music is already open but paused
+    char status_buffer[256];
+    mciSendStringA("status dixon_song mode", status_buffer, sizeof(status_buffer), NULL);
+    
+    if (strcmp(status_buffer, "paused") == 0) {
+        // If music is already open and paused, resume playback
+        OutputDebugStringA("Continuing paused music\n");
+        MCIERROR err = mciSendStringA("resume dixon_song", NULL, 0, NULL);
+        if (err != 0) {
+            mciGetErrorStringA(err, error_buffer, sizeof(error_buffer));
+            OutputDebugStringA("Resume error: ");
+            OutputDebugStringA(error_buffer);
+            OutputDebugStringA("\n");
+            MessageBoxA(g_main_window, error_buffer, "Error resuming music", MB_OK | MB_ICONERROR);
+            return;
+        } else {
+            OutputDebugStringA("Resume successful\n");
+        }
+    } else {
+        // Stop any previously playing music
+        mciSendStringA("stop dixon_song", NULL, 0, NULL);
+        mciSendStringA("close dixon_song", NULL, 0, NULL);
+        
+        // Play MP3 file using mciSendString
+        snprintf(command, sizeof(command), "open \"%s\" type mpegvideo alias dixon_song", music_path);
+        OutputDebugStringA("Open command: ");
+        OutputDebugStringA(command);
+        OutputDebugStringA("\n");
+        
+        MCIERROR err = mciSendStringA(command, NULL, 0, NULL);
+        if (err != 0) {
+            mciGetErrorStringA(err, error_buffer, sizeof(error_buffer));
+            OutputDebugStringA("Open error: ");
+            OutputDebugStringA(error_buffer);
+            OutputDebugStringA("\n");
+            MessageBoxA(g_main_window, error_buffer, "Error opening music", MB_OK | MB_ICONERROR);
+            return;
+        } else {
+            OutputDebugStringA("Open successful\n");
+        }
+        
+        // Set time format to milliseconds
+        mciSendStringA("set dixon_song time format milliseconds", NULL, 0, NULL);
+        
+        snprintf(command, sizeof(command), "play dixon_song");
+        OutputDebugStringA("Play command: ");
+        OutputDebugStringA(command);
+        OutputDebugStringA("\n");
+        
+        err = mciSendStringA(command, NULL, 0, NULL);
+        if (err != 0) {
+            mciGetErrorStringA(err, error_buffer, sizeof(error_buffer));
+            OutputDebugStringA("Play error: ");
+            OutputDebugStringA(error_buffer);
+            OutputDebugStringA("\n");
+            MessageBoxA(g_main_window, error_buffer, "Error playing music", MB_OK | MB_ICONERROR);
+            mciSendStringA("close dixon_song", NULL, 0, NULL);
+            return;
+        } else {
+            OutputDebugStringA("Play successful\n");
+        }
+    }
+    
+    g_music_playing = 1; // Mark music as playing
+    g_current_lyric = 0; // Start from first lyric
+    
+    // Show initial lyrics (first five lines) immediately when Play is clicked
+    if (g_lyric_count > 0 && g_music_lyrics) {
+        char lyric_text[2048] = "";
+        
+        // Display five lines of lyrics, with current lyric in the middle
+        // Calculate start index
+        int start_index = 0;
+        // Calculate end index
+        int end_index = g_current_lyric + 2;
+        if (end_index >= g_lyric_count) end_index = g_lyric_count - 1;
+        
+        // Add empty lines at the beginning (2 lines)
+        strcat(lyric_text, "\r\n\r\n");
+        
+        // Display lyrics lines
+        for (int i = start_index; i <= end_index; i++) {
+            strcat(lyric_text, g_lyrics[i].text);
+            if (i < end_index) {
+                strcat(lyric_text, "\r\n");
+            }
+        }
+        
+        // Add empty lines if needed at the end
+        int empty_lines_after = 2 - (end_index - g_current_lyric);
+        for (int i = 0; i < empty_lines_after; i++) {
+            strcat(lyric_text, "\r\n");
+        }
+        
+        set_edit_text(g_music_lyrics, lyric_text);
+        // Force redraw of lyrics display
+        RedrawWindow(g_music_lyrics, NULL, NULL, RDW_FRAME | RDW_INVALIDATE | RDW_UPDATENOW);
+    }
+    
+    // Start lyrics update timer
+    if (g_main_window) {
+        SetTimer(g_main_window, ID_MUSIC_TIMER, 100, NULL);
+        OutputDebugStringA("Timer started\n");
+    } else {
+        OutputDebugStringA("Main window is NULL\n");
+    }
+}
+
+static void pause_music(void)
+{
+    // Pause music
+    if (g_music_playing) {
+        mciSendStringA("pause dixon_song", NULL, 0, NULL);
+        g_music_playing = 0;
+        
+        // Stop lyrics update timer
+        KillTimer(g_main_window, ID_MUSIC_TIMER);
+    }
+}
+
+static void stop_music(void)
+{
+    // Stop music
+    if (g_music_playing) {
+        mciSendStringA("stop dixon_song", NULL, 0, NULL);
+        mciSendStringA("close dixon_song", NULL, 0, NULL);
+        g_music_playing = 0;
+        
+        // Stop lyrics update timer
+        KillTimer(g_main_window, ID_MUSIC_TIMER);
+    }
 }
 
 static void clear_all(void)
@@ -977,6 +1522,9 @@ static LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
                 if (tab_index < 0 || tab_index >= TAB_COUNT) tab_index = 0;
                 if (tab_index != g_current_tab_index) show_active_tab();
                 return 0;
+            } else if (wparam == ID_MUSIC_TIMER) {
+                update_lyrics();
+                return 0;
             }
             break;
         case WM_COMMAND:
@@ -999,6 +1547,15 @@ static LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
                         return 0;
                     }
                     break;
+                case ID_MUSIC_PLAY:
+                    play_music();
+                    return 0;
+                case ID_MUSIC_PAUSE:
+                    pause_music();
+                    return 0;
+                case ID_MUSIC_STOP:
+                    stop_music();
+                    return 0;
                 default:
                     break;
             }
