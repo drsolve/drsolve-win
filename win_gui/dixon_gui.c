@@ -908,7 +908,7 @@ static void parse_lyrics(void)
         "[00:10.020](Verse1)\n"
         "[00:10.200]When the system's full of equations, hard to crack,\n"
         "[00:16.140]Groebner bases are powerful, yet slow to come back.\n"
-        "[00:20.280]Zero-dimensional is all they know,that's such a shame,\n"
+        "[00:20.280]Zero-dimensional is all they know, that's such a shame,\n"
         "[00:26.790]FGLM can't help you when the unknowns aren't the same.\n"
         "[00:29.940](Chorus)\n"
         "[00:31.200]Oh, Dixon, Dixon, where'd you go?\n"
