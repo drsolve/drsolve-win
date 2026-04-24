@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define DIXON_PATH_CAP 4096
+#define DRSOLVE_PATH_CAP 4096
 
 static void set_win32_error(char *buffer, size_t size, const char *prefix, DWORD error_code)
 {
@@ -166,9 +166,9 @@ static int launch_interactive_shell(void)
 
 int main(void)
 {
-    char root_dir[DIXON_PATH_CAP];
-    char dll_dir[DIXON_PATH_CAP];
-    char real_cli[DIXON_PATH_CAP];
+    char root_dir[DRSOLVE_PATH_CAP];
+    char dll_dir[DRSOLVE_PATH_CAP];
+    char real_cli[DRSOLVE_PATH_CAP];
     const char *tail = skip_program_name(GetCommandLineA());
     int launch_shell_after_exit = (*tail == '\0' && launcher_owns_console());
     char *command_line = NULL;
@@ -180,7 +180,7 @@ int main(void)
     char error_message[512];
 
     if (!get_module_dir(root_dir, sizeof(root_dir))) {
-        fprintf(stderr, "Failed to resolve the dixon.exe directory.\n");
+        fprintf(stderr, "Failed to resolve the drsolve.exe directory.\n");
         return 1;
     }
 
@@ -189,17 +189,19 @@ int main(void)
         return 1;
     }
 
-    if (!build_path(real_cli, sizeof(real_cli), root_dir, "bin\\dixon_cli_real.exe")) {
+    if (!build_path(real_cli, sizeof(real_cli), root_dir, "bin\\drsolve_cli_real.exe")) {
         fprintf(stderr, "The internal CLI path is too long.\n");
         return 1;
     }
+
+    SetDllDirectoryA(dll_dir);
 
     if (!configure_child_path(dll_dir, error_message, sizeof(error_message))) {
         fprintf(stderr, "%s\n", error_message);
         return 1;
     }
 
-    SetEnvironmentVariableA("DIXON_DISPLAY_NAME", "dixon.exe");
+    SetEnvironmentVariableA("DIXON_DISPLAY_NAME", "drsolve.exe");
 
     needed = strlen(real_cli) + strlen(tail) + 4;
     command_line = (char *) malloc(needed);
