@@ -126,7 +126,7 @@ show-config:
 	@echo "LIB_DIR             = $(LIB_DIR)"
 
 clean:
-	rm -rf $(BUILD_DIR) $(BIN_DIR) $(DLL_DIR) $(LIB_DIR)
+	rm -rf $(BUILD_DIR)
 	rm -f $(DRSOLVE_TARGET) $(WIN_GUI_TARGET) $(DRSOLVE_REAL_TARGET)
 	rm -f dixon.exe dixon_win_gui.exe dixon_cli_real.exe
 	rm -f libdrsolve-1.a libdrsolve-1.dll libdrsolve-1.dll.a libpml.dll libpml.dll.a

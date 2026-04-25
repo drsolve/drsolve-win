@@ -50,6 +50,65 @@ static int build_path(char *buffer, size_t size, const char *dir, const char *ta
     return snprintf(buffer, size, "%s\\%s", dir, tail) < (int) size;
 }
 
+static int build_versioned_cli_copy(char *buffer, size_t size,
+                                    const char *source_cli,
+                                    char *error_message, size_t error_message_size)
+{
+    WIN32_FILE_ATTRIBUTE_DATA attrs;
+    char dir[DRSOLVE_PATH_CAP];
+    const char *slash;
+    size_t dir_len;
+    int written;
+
+    if (!GetFileAttributesExA(source_cli, GetFileExInfoStandard, &attrs)) {
+        set_win32_error(error_message, error_message_size,
+                        "Failed to inspect the internal CLI executable", GetLastError());
+        return 0;
+    }
+
+    slash = strrchr(source_cli, '\\');
+    if (!slash) slash = strrchr(source_cli, '/');
+    if (!slash) {
+        snprintf(error_message, error_message_size,
+                 "Failed to derive the internal CLI directory.");
+        return 0;
+    }
+
+    dir_len = (size_t) (slash - source_cli);
+    if (dir_len + 1 > sizeof(dir)) {
+        snprintf(error_message, error_message_size,
+                 "The internal CLI directory path is too long.");
+        return 0;
+    }
+
+    memcpy(dir, source_cli, dir_len);
+    dir[dir_len] = '\0';
+
+    written = snprintf(buffer, size,
+                       "%s\\drsolve_cli_real_%08lx%08lx.exe",
+                       dir,
+                       (unsigned long) attrs.ftLastWriteTime.dwHighDateTime,
+                       (unsigned long) attrs.ftLastWriteTime.dwLowDateTime);
+    if (written < 0 || (size_t) written >= size) {
+        snprintf(error_message, error_message_size,
+                 "The versioned CLI executable path is too long.");
+        return 0;
+    }
+
+    if (GetFileAttributesA(buffer) == INVALID_FILE_ATTRIBUTES) {
+        if (!CopyFileA(source_cli, buffer, TRUE)) {
+            DWORD copy_error = GetLastError();
+            if (copy_error != ERROR_FILE_EXISTS) {
+                set_win32_error(error_message, error_message_size,
+                                "Failed to stage a fresh internal CLI copy", copy_error);
+                return 0;
+            }
+        }
+    }
+
+    return 1;
+}
+
 static char *dup_environment_value(const char *name)
 {
     DWORD needed = GetEnvironmentVariableA(name, NULL, 0);
@@ -168,6 +227,7 @@ int main(void)
 {
     char root_dir[DRSOLVE_PATH_CAP];
     char dll_dir[DRSOLVE_PATH_CAP];
+    char real_cli_source[DRSOLVE_PATH_CAP];
     char real_cli[DRSOLVE_PATH_CAP];
     const char *tail = skip_program_name(GetCommandLineA());
     int launch_shell_after_exit = (*tail == '\0' && launcher_owns_console());
@@ -189,8 +249,14 @@ int main(void)
         return 1;
     }
 
-    if (!build_path(real_cli, sizeof(real_cli), root_dir, "bin\\drsolve_cli_real.exe")) {
+    if (!build_path(real_cli_source, sizeof(real_cli_source), root_dir, "bin\\drsolve_cli_real.exe")) {
         fprintf(stderr, "The internal CLI path is too long.\n");
+        return 1;
+    }
+
+    if (!build_versioned_cli_copy(real_cli, sizeof(real_cli), real_cli_source,
+                                  error_message, sizeof(error_message))) {
+        fprintf(stderr, "%s\n", error_message);
         return 1;
     }
 
