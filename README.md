@@ -60,7 +60,7 @@ This layout keeps the top-level directory clean while still allowing:
 If you want to rebuild the Windows package in the future:
 
 1. Keep this directory structure unchanged.
-2. Make sure the bundled `third_party/` and `runtime/` directories are present.
+2. Make sure the bundled `third_party/` directories are present.
 3. Run `make clean`.
 4. Run `make`.
 
